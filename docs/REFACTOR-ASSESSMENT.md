@@ -41,7 +41,7 @@
 - Auto-create with 5 modes
 - Session home + breakdown structure
 - Chain roll-up (project → umbrella → MASTER)
-- Atomic file locking with 60s stale cleanup
+- Atomic file locking with 1s stale cleanup + 400ms retry window
 - Transcript caching (MD5 hash)
 - Git caching (5s/60s)
 
@@ -125,7 +125,7 @@ Section headers added:
 
 If the script grows significantly (>2000 lines), consider:
 
-1. **Extract lock helpers** - Used 3x, could be DRY
+1. ~~**Extract lock helpers** - Used 3x, could be DRY~~ ✓ Done (acquire_lock/release_lock)
 2. **Color abstraction** - Single function handling 256/truecolor
 3. **Config validation** - Separate function for loading/validating config
 4. **Test suite** - Shell unit tests for CLI commands
