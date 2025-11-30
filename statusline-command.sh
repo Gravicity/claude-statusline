@@ -221,6 +221,109 @@ sync_project() {
     exit 0
 }
 
+# Dedicate a session's full cost to a specific project
+dedicate_session() {
+    local session_short="${1:-}"
+    local target_project="${2:-$PWD}"
+
+    [[ -z "$session_short" ]] && { cli_print_error "Usage: --dedicate <session-id> [project-path]"; exit 1; }
+
+    # Find full session ID from short form
+    local cache_dir="$HOME/.cache/claude-statusline"
+    local state_file=$(ls "$cache_dir"/session-*"$session_short"*.state 2>/dev/null | head -1)
+
+    if [[ -z "$state_file" || ! -f "$state_file" ]]; then
+        cli_print_error "Session not found: $session_short"
+        cli_print_info "Available sessions:"
+        ls "$cache_dir"/session-*.state 2>/dev/null | sed 's|.*/session-||;s|\.state||' | while read sid; do
+            echo -e "    ${DIM}${sid:0:8}${RESET}"
+        done
+        exit 1
+    fi
+
+    local session_id=$(basename "$state_file" | sed 's/session-//;s/\.state//')
+    local actual_cost=$(cut -d'|' -f1 < "$state_file")
+
+    # Find target project config
+    target_project=$(cd "$target_project" 2>/dev/null && pwd) || { cli_print_error "Directory not found: $2"; exit 1; }
+    local project_config="$target_project/.claude/statusline-project.json"
+    [[ ! -f "$project_config" ]] && { cli_print_error "No project config at: $project_config"; exit 1; }
+
+    local project_name=$(jq -r '.name // "unknown"' "$project_config")
+    local parent_config=$(jq -r '.parent // empty' "$project_config")
+
+    echo -e "\n  ${BOLD}Dedicate Session to Project${RESET}\n"
+    echo -e "  Session:  ${CYAN}${session_id:0:8}${RESET}"
+    echo -e "  Cost:     ${GREEN}\$${actual_cost}${RESET}"
+    echo -e "  Project:  ${CYAN}${project_name}${RESET}"
+
+    if [[ -z "$parent_config" || ! -f "$parent_config" ]]; then
+        cli_print_warn "Project has no parent umbrella - nothing to dedicate from"
+        exit 0
+    fi
+
+    local umbrella_name=$(jq -r '.name // "umbrella"' "$parent_config")
+    echo -e "  Umbrella: ${CYAN}${umbrella_name}${RESET}"
+
+    # Check current state
+    local umbrella_direct=$(jq -r ".costs.sessions[\"$session_id\"].contributed // 0" "$parent_config")
+    local project_current=$(jq -r ".costs.sessions[\"$session_id\"].contributed // 0" "$project_config")
+
+    echo ""
+    echo -e "  ${DIM}Current attribution:${RESET}"
+    printf "    Umbrella direct: ${YELLOW}\$%.2f${RESET}\n" "$umbrella_direct"
+    printf "    Project tracked: ${YELLOW}\$%.2f${RESET}\n" "$project_current"
+    printf "    Actual cost:     ${GREEN}\$%.2f${RESET}\n" "$actual_cost"
+    echo ""
+
+    # Confirm
+    echo -ne "  ${SLATE}Dedicate full \$${actual_cost} to ${project_name}? [y/N]:${RESET} "
+    read -r response
+    [[ ! "$response" =~ ^[Yy] ]] && { echo "  Cancelled."; exit 0; }
+
+    echo ""
+
+    # Update sub-project: set session contributed to full cost
+    cli_print_info "Updating ${project_name}..."
+    local updated_project=$(jq --arg sid "$session_id" --argjson cost "$actual_cost" '
+        .costs.sessions[$sid].contributed = $cost |
+        .costs.sessions[$sid].dedicated = true |
+        .costs.total = ([.costs.sessions // {} | to_entries[].value.contributed // 0] | add // 0) |
+        .costs.last_updated = (now | todate)
+    ' "$project_config")
+    echo "$updated_project" > "$project_config"
+
+    local new_project_total=$(echo "$updated_project" | jq -r '.costs.total')
+
+    # Update umbrella: remove from direct sessions, update projects
+    cli_print_info "Updating ${umbrella_name}..."
+    local updated_umbrella=$(jq --arg sid "$session_id" --arg sub "$project_name" --argjson subtotal "$new_project_total" '
+        # Remove session from direct tracking (set to 0, keep for history)
+        .costs.sessions[$sid].contributed = 0 |
+        .costs.sessions[$sid].dedicated_to = $sub |
+        # Update sub-project contribution
+        .costs.projects[$sub].contributed = $subtotal |
+        .costs.projects[$sub].sessions = ((.costs.projects[$sub].sessions // []) + [$sid] | unique) |
+        # Recalculate total
+        .costs.total = (
+            ([.costs.sessions // {} | to_entries[].value.contributed // 0] | add // 0) +
+            ([.costs.projects // {} | to_entries[].value.contributed // 0] | add // 0)
+        ) |
+        .costs.last_updated = (now | todate)
+    ' "$parent_config")
+    echo "$updated_umbrella" > "$parent_config"
+
+    local new_umbrella_total=$(echo "$updated_umbrella" | jq -r '.costs.total')
+
+    echo ""
+    cli_print_success "Session ${session_id:0:8} dedicated to ${project_name}"
+    printf "  ${GREEN}✓${RESET} Project total: ${BOLD}\$%.2f${RESET}\n" "$new_project_total"
+    printf "  ${GREEN}✓${RESET} Umbrella total: ${BOLD}\$%.2f${RESET}\n" "$new_umbrella_total"
+    echo ""
+
+    exit 0
+}
+
 # CLI help
 show_cli_help() {
     echo ""
@@ -231,13 +334,15 @@ show_cli_help() {
     echo -e "    ${SLATE}--init-project${RESET}    Create project config in current or specified directory"
     echo -e "    ${SLATE}--init-umbrella${RESET}   Create umbrella/parent project config"
     echo -e "    ${SLATE}--sync${RESET}            Sync project costs with actual transcript data"
+    echo -e "    ${SLATE}--dedicate${RESET}        Dedicate a session's full cost to a project"
     echo -e "    ${SLATE}--help${RESET}            Show this help"
     echo ""
     echo -e "  ${DIM}Examples:${RESET}"
     echo -e "    ${CYAN}~/.claude/statusline-command.sh --init-umbrella ~/projects${RESET}"
     echo -e "    ${CYAN}~/.claude/statusline-command.sh --init-project${RESET}"
     echo -e "    ${CYAN}~/.claude/statusline-command.sh --sync${RESET}"
-    echo -e "    ${CYAN}cd ~/projects/my-app && ~/.claude/statusline-command.sh --sync${RESET}"
+    echo -e "    ${CYAN}~/.claude/statusline-command.sh --dedicate a3013a${RESET}"
+    echo -e "    ${CYAN}~/.claude/statusline-command.sh --dedicate a3013a ~/projects/my-app${RESET}"
     echo ""
     exit 0
 }
@@ -247,6 +352,7 @@ case "${1:-}" in
     --init-umbrella) init_umbrella "${2:-}" ;;
     --init-project)  init_project "${2:-}" ;;
     --sync)          sync_project "${2:-}" ;;
+    --dedicate)      dedicate_session "${2:-}" "${3:-}" ;;
     --help|-h)       show_cli_help ;;
 esac
 
