@@ -858,6 +858,18 @@ if [[ "$TRACKING_ENABLED" == "true" && -n "$session_home" && $display_cycle -eq 
     # Session lives where it started, with breakdown tracking where work was done
     update_project_cost "$session_home" "$cost_delta" "$session_id" "$CLAUDE_PLAN" "$breakdown_key" "$transcript_path"
 
+    # Phase 2 FIX: If working in a child project, also update that project directly
+    # This ensures the child project tracks its own costs even when session started elsewhere
+    if [[ "$breakdown_key" != "_self" && -n "$project_config" && -f "$project_config" && "$project_config" != "$session_home" ]]; then
+        # Update child project with _self breakdown (work done directly in this project)
+        update_project_cost "$project_config" "$cost_delta" "$session_id" "$CLAUDE_PLAN" "_self" "$transcript_path"
+
+        # Also roll up from child to session_home (updates parent's projects.child tracking)
+        child_name=$(jq -r '.name // "unknown"' "$project_config" 2>/dev/null)
+        child_total=$(jq -r '.costs.total // 0' "$project_config" 2>/dev/null)
+        update_parent_project "$session_home" "$child_name" "$child_total" "$session_id" "$CLAUDE_PLAN"
+    fi
+
     # Roll up the entire chain from session_home to MASTER
     # Each project's total gets reported to its parent
     rollup_config="$session_home"
