@@ -770,7 +770,7 @@ if [[ -n "$project_config" && "$project_config" != "$session_home" ]]; then
 fi
 
 # --- File Locking ---
-# Atomic lock acquisition with 1s stale cleanup and single retry
+# Atomic lock acquisition with 1s stale cleanup and retries
 # Actual file updates take ~25-50ms, so 1s stale is 20-40x margin
 acquire_lock() {
     local lock_dir="$1"
@@ -781,12 +781,14 @@ acquire_lock() {
         [[ $lock_age -ge 1 ]] && rmdir "$lock_dir" 2>/dev/null
     fi
 
-    # Try to acquire, retry once after 200ms if busy
+    # Try to acquire with 2 retries (150ms + 250ms = 400ms window)
     mkdir "$lock_dir" 2>/dev/null && return 0
-    sleep 0.2
+    sleep 0.15
+    mkdir "$lock_dir" 2>/dev/null && return 0
+    sleep 0.25
     mkdir "$lock_dir" 2>/dev/null && return 0
 
-    return 1  # Failed after retry
+    return 1  # Failed after retries
 }
 
 release_lock() {
