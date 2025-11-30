@@ -753,13 +753,13 @@ fi
 # Line 4: Duration─Messages─Code─Session
 line_stats="${THEME_PRIMARY}│${RESET} "
 [[ -n "$duration_info" ]] && line_stats+="⧗ ${THEME_ACCENT}${duration_info}${RESET}"
-[[ $msg_count -gt 0 ]] && line_stats+=" 💬 ${B_CYAN}$(format_num $msg_count)${RESET}"
+[[ $msg_count -gt 0 ]] && line_stats+=" 💬${B_CYAN}$(format_num $msg_count)${RESET}"
 [[ -n "$code_added" ]] && line_stats+=" ${THEME_ACCENT}${code_added}${RESET}${B_RED}${code_removed}${RESET}"
 
 if [[ -f "$transcript_path" ]]; then
-    line_stats+=" \033]8;;${IDE_SCHEME}${transcript_path}\007${THEME_ACCENT}※ ${session_short}${RESET}\033]8;;\007"
+    line_stats+=" \033]8;;${IDE_SCHEME}${transcript_path}\007${THEME_ACCENT}※${session_short}${RESET}\033]8;;\007"
 else
-    line_stats+=" ${THEME_ACCENT}※ ${session_short}${RESET}"
+    line_stats+=" ${THEME_ACCENT}※${session_short}${RESET}"
 fi
 
 # Line 5: Pulse animation with cache shield
