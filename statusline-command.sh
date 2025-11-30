@@ -9,18 +9,30 @@
 RESET='\033[0m'
 BOLD='\033[1m'
 DIM='\033[2m'
-PURPLE='\033[1;38;2;139;92;246m'
-GREEN='\033[1;38;2;34;197;94m'
-YELLOW='\033[1;38;2;234;179;8m'
 CYAN='\033[1;36m'
-SLATE='\033[1;38;2;148;163;184m'
+
+# CLI colors - detect truecolor for pretty output, fallback to 256
+if [[ "$COLORTERM" == "truecolor" || "$COLORTERM" == "24bit" ]]; then
+    PURPLE='\033[1;38;2;139;92;246m'
+    GREEN='\033[1;38;2;34;197;94m'
+    YELLOW='\033[1;38;2;234;179;8m'
+    SLATE='\033[1;38;2;148;163;184m'
+else
+    PURPLE='\033[1;38;5;141m'   # 256-color purple
+    GREEN='\033[1;38;5;35m'     # 256-color green
+    YELLOW='\033[1;38;5;220m'   # 256-color yellow
+    SLATE='\033[1;38;5;248m'    # 256-color gray
+fi
 
 cli_print_success() { echo -e "  ${GREEN}✓${RESET} $1"; }
 cli_print_info() { echo -e "  ${CYAN}→${RESET} $1"; }
 cli_print_warn() { echo -e "  ${YELLOW}!${RESET} $1"; }
 cli_print_error() { echo -e "  ${PURPLE}✗${RESET} $1"; }
 
-# Find parent umbrella project
+# MASTER root config location
+MASTER_CONFIG="$HOME/.claude/statusline-project.json"
+
+# Find parent umbrella project (walks up to find parent, falls back to MASTER)
 find_parent_umbrella() {
     local dir="$1"
     local parent_dir=$(dirname "$dir")
@@ -33,6 +45,42 @@ find_parent_umbrella() {
         parent_dir=$(dirname "$parent_dir")
         ((depth++))
     done
+    # Fall back to MASTER root if it exists
+    [[ -f "$MASTER_CONFIG" ]] && echo "$MASTER_CONFIG"
+}
+
+# Initialize MASTER root at ~/.claude
+init_master() {
+    local config="$MASTER_CONFIG"
+
+    if [[ -f "$config" ]]; then
+        cli_print_warn "MASTER root already exists: $config"
+        echo -ne "  ${SLATE}Overwrite? [y/N]:${RESET} "
+        read -r response
+        [[ ! "$response" =~ ^[Yy] ]] && exit 0
+    fi
+
+    mkdir -p "$HOME/.claude" || { cli_print_error "Cannot create ~/.claude directory"; exit 1; }
+
+    cat > "$config" << 'EOF'
+{
+  "name": "Claude Master Statusline",
+  "icon": "🏠",
+  "color": "#8B5CF6",
+  "git": null,
+  "parent": null,
+  "costs": {
+    "sessions": {},
+    "total": 0,
+    "session_count": 0,
+    "projects": {}
+  }
+}
+EOF
+
+    cli_print_success "Created MASTER root: ${CYAN}$config${RESET}"
+    cli_print_info "All projects without a closer parent will roll up here"
+    exit 0
 }
 
 # Initialize umbrella project
@@ -115,6 +163,7 @@ EOF
 }
 
 # Sync project costs with actual session data from state files
+# Phase 2: Sync project with breakdown structure support
 sync_project() {
     local target="${1:-$PWD}"
     target=$(cd "$target" 2>/dev/null && pwd) || { cli_print_error "Directory not found: $1"; exit 1; }
@@ -134,13 +183,14 @@ sync_project() {
         project_name=$(jq -r '.name // "unknown"' "$config" 2>/dev/null)
     fi
 
-    echo -e "\n  ${BOLD}Syncing: $project_name${RESET}\n"
+    echo -e "\n  ${BOLD}Syncing: $project_name (Phase 2)${RESET}\n"
 
     # Read all sessions from config
     local sessions=$(jq -r '.costs.sessions // {} | keys[]' "$config" 2>/dev/null)
     [[ -z "$sessions" ]] && { cli_print_warn "No sessions found in project config"; exit 0; }
 
     local updated=0
+    local migrated=0
     local total_diff=0
     local updated_config=$(cat "$config")
 
@@ -152,18 +202,52 @@ sync_project() {
         local actual_cost=""
 
         if [[ -f "$state_file" ]]; then
-            # State file format: cost|project_config_path
+            # State file format: cost|session_home_config
             actual_cost=$(cut -d'|' -f1 < "$state_file" 2>/dev/null)
         fi
 
+        # Get current recorded cost (Phase 2: total_cost or contributed for backward compat)
+        local recorded=$(echo "$updated_config" | jq -r ".costs.sessions[\"$session_id\"].total_cost // .costs.sessions[\"$session_id\"].contributed // 0")
+        [[ "$recorded" == "null" ]] && recorded=0
+
+        # Check if session has breakdown or needs migration
+        local has_breakdown=$(echo "$updated_config" | jq -r ".costs.sessions[\"$session_id\"].breakdown // empty")
+
+        if [[ -z "$has_breakdown" ]]; then
+            # Migrate: old contributed -> breakdown._self
+            local old_contributed=$(echo "$updated_config" | jq -r ".costs.sessions[\"$session_id\"].contributed // 0")
+            local dedicated_to=$(echo "$updated_config" | jq -r ".costs.sessions[\"$session_id\"].dedicated_to // empty")
+
+            printf "  ${CYAN}↑${RESET} Session ${DIM}${session_id:0:8}${RESET}: migrating to Phase 2 breakdown"
+
+            if [[ -n "$dedicated_to" ]]; then
+                # Was dedicated: put full amount in breakdown[dedicated_to]
+                printf " ${DIM}(dedicated to ${dedicated_to})${RESET}\n"
+                local migrate_amount="$old_contributed"
+                [[ -n "$actual_cost" && "$actual_cost" != "0" ]] && migrate_amount="$actual_cost"
+                updated_config=$(echo "$updated_config" | jq --arg sid "$session_id" --arg child "$dedicated_to" --argjson amt "$migrate_amount" '
+                    .costs.sessions[$sid].breakdown = { "_self": 0, ($child): $amt } |
+                    .costs.sessions[$sid].total_cost = $amt
+                ')
+            else
+                # Not dedicated: put in breakdown._self
+                printf "\n"
+                local migrate_amount="$old_contributed"
+                [[ -n "$actual_cost" && "$actual_cost" != "0" ]] && migrate_amount="$actual_cost"
+                updated_config=$(echo "$updated_config" | jq --arg sid "$session_id" --argjson amt "$migrate_amount" '
+                    .costs.sessions[$sid].breakdown = { "_self": $amt } |
+                    .costs.sessions[$sid].total_cost = $amt
+                ')
+            fi
+            ((migrated++))
+            continue
+        fi
+
+        # Session has breakdown - check if needs sync
         if [[ -z "$actual_cost" || "$actual_cost" == "0" ]]; then
             printf "  ${YELLOW}!${RESET} Session ${DIM}${session_id:0:8}${RESET}: no state file found, skipping\n"
             continue
         fi
-
-        # Get current recorded cost
-        local recorded=$(echo "$updated_config" | jq -r ".costs.sessions[\"$session_id\"].contributed // 0")
-        [[ "$recorded" == "null" ]] && recorded=0
 
         # Calculate difference
         local diff=$(echo "$actual_cost - $recorded" | bc -l 2>/dev/null || echo "0")
@@ -174,14 +258,14 @@ sync_project() {
             printf "${YELLOW}\$%.2f${RESET} → ${GREEN}\$%.2f${RESET} " "$recorded" "$actual_cost"
             if (( $(echo "$diff > 0" | bc -l) )); then
                 printf "${GREEN}(+\$%.2f)${RESET}\n" "$diff"
+                # Add difference to _self (unattributed new cost)
+                updated_config=$(echo "$updated_config" | jq --arg sid "$session_id" --argjson diff "$diff" '
+                    .costs.sessions[$sid].breakdown._self = ((.costs.sessions[$sid].breakdown._self // 0) + $diff) |
+                    .costs.sessions[$sid].total_cost = ([.costs.sessions[$sid].breakdown // {} | to_entries[].value] | add // 0)
+                ')
             else
                 printf "${YELLOW}(\$%.2f)${RESET}\n" "$diff"
             fi
-
-            # Update the config in memory
-            updated_config=$(echo "$updated_config" | jq --arg sid "$session_id" --argjson cost "$actual_cost" \
-                '.costs.sessions[$sid].contributed = $cost')
-
             ((updated++))
             total_diff=$(echo "$total_diff + $diff" | bc -l 2>/dev/null || echo "$total_diff")
         else
@@ -191,11 +275,11 @@ sync_project() {
 
     echo ""
 
-    if [[ $updated -gt 0 ]]; then
-        # Recalculate total (sum sessions + projects contributions)
+    if [[ $updated -gt 0 || $migrated -gt 0 ]]; then
+        # Recalculate total (sum sessions total_cost/contributed + projects contributions)
         updated_config=$(echo "$updated_config" | jq '
             .costs.total = (
-                ([.costs.sessions // {} | to_entries[].value.contributed // 0] | add // 0) +
+                ([.costs.sessions // {} | to_entries[].value.total_cost // .value.contributed // 0] | add // 0) +
                 ([.costs.projects // {} | to_entries[].value.contributed // 0] | add // 0)
             ) |
             .costs.last_updated = (now | todate)
@@ -206,11 +290,16 @@ sync_project() {
         # Write updated config
         echo "$updated_config" > "$config"
 
-        printf "  ${GREEN}✓${RESET} Synced ${BOLD}%d${RESET} sessions, " "$updated"
-        if (( $(echo "$total_diff > 0" | bc -l) )); then
-            printf "added ${GREEN}\$%.2f${RESET}\n" "$total_diff"
-        else
-            printf "adjusted ${YELLOW}\$%.2f${RESET}\n" "$total_diff"
+        if [[ $migrated -gt 0 ]]; then
+            printf "  ${GREEN}✓${RESET} Migrated ${BOLD}%d${RESET} sessions to Phase 2 breakdown\n" "$migrated"
+        fi
+        if [[ $updated -gt 0 ]]; then
+            printf "  ${GREEN}✓${RESET} Synced ${BOLD}%d${RESET} sessions, " "$updated"
+            if (( $(echo "$total_diff > 0" | bc -l) )); then
+                printf "added ${GREEN}\$%.2f${RESET}\n" "$total_diff"
+            else
+                printf "adjusted ${YELLOW}\$%.2f${RESET}\n" "$total_diff"
+            fi
         fi
         printf "  ${GREEN}✓${RESET} New total: ${BOLD}\$%.2f${RESET}\n\n" "$new_total"
     else
@@ -222,6 +311,8 @@ sync_project() {
 }
 
 # Dedicate a session's full cost to a specific project
+# Phase 2: Dedicate session's _self breakdown to a child project
+# Moves breakdown._self amount to breakdown[child_name]
 dedicate_session() {
     local session_short="${1:-}"
     local target_project="${2:-$PWD}"
@@ -243,82 +334,72 @@ dedicate_session() {
 
     local session_id=$(basename "$state_file" | sed 's/session-//;s/\.state//')
     local actual_cost=$(cut -d'|' -f1 < "$state_file")
+    local session_home=$(cut -d'|' -f2 < "$state_file")
 
-    # Find target project config
+    # Find target project (child to dedicate to)
     target_project=$(cd "$target_project" 2>/dev/null && pwd) || { cli_print_error "Directory not found: $2"; exit 1; }
     local project_config="$target_project/.claude/statusline-project.json"
     [[ ! -f "$project_config" ]] && { cli_print_error "No project config at: $project_config"; exit 1; }
 
-    local project_name=$(jq -r '.name // "unknown"' "$project_config")
-    local parent_config=$(jq -r '.parent // empty' "$project_config")
+    local child_name=$(jq -r '.name // "unknown"' "$project_config")
 
-    echo -e "\n  ${BOLD}Dedicate Session to Project${RESET}\n"
-    echo -e "  Session:  ${CYAN}${session_id:0:8}${RESET}"
-    echo -e "  Cost:     ${GREEN}\$${actual_cost}${RESET}"
-    echo -e "  Project:  ${CYAN}${project_name}${RESET}"
+    # Session must exist in session_home
+    [[ ! -f "$session_home" ]] && { cli_print_error "Session home not found: $session_home"; exit 1; }
 
-    if [[ -z "$parent_config" || ! -f "$parent_config" ]]; then
-        cli_print_warn "Project has no parent umbrella - nothing to dedicate from"
+    local home_name=$(jq -r '.name // "unknown"' "$session_home")
+
+    echo -e "\n  ${BOLD}Dedicate Session (Phase 2)${RESET}\n"
+    echo -e "  Session:      ${CYAN}${session_id:0:8}${RESET}"
+    echo -e "  Session home: ${CYAN}${home_name}${RESET}"
+    echo -e "  Dedicate to:  ${CYAN}${child_name}${RESET}"
+
+    # Get current breakdown
+    local self_amount=$(jq -r ".costs.sessions[\"$session_id\"].breakdown._self // .costs.sessions[\"$session_id\"].contributed // 0" "$session_home")
+    local child_current=$(jq -r ".costs.sessions[\"$session_id\"].breakdown[\"$child_name\"] // 0" "$session_home")
+    local total_cost_session=$(jq -r ".costs.sessions[\"$session_id\"].total_cost // .costs.sessions[\"$session_id\"].contributed // 0" "$session_home")
+
+    echo ""
+    echo -e "  ${DIM}Current breakdown:${RESET}"
+    printf "    _self:        ${YELLOW}\$%.2f${RESET}\n" "$self_amount"
+    printf "    ${child_name}: ${YELLOW}\$%.2f${RESET}\n" "$child_current"
+    printf "    Total cost:   ${GREEN}\$%.2f${RESET}\n" "$total_cost_session"
+    echo ""
+
+    if (( $(echo "$self_amount == 0" | bc -l) )); then
+        cli_print_warn "No _self amount to dedicate (already 0)"
         exit 0
     fi
 
-    local umbrella_name=$(jq -r '.name // "umbrella"' "$parent_config")
-    echo -e "  Umbrella: ${CYAN}${umbrella_name}${RESET}"
-
-    # Check current state
-    local umbrella_direct=$(jq -r ".costs.sessions[\"$session_id\"].contributed // 0" "$parent_config")
-    local project_current=$(jq -r ".costs.sessions[\"$session_id\"].contributed // 0" "$project_config")
-
-    echo ""
-    echo -e "  ${DIM}Current attribution:${RESET}"
-    printf "    Umbrella direct: ${YELLOW}\$%.2f${RESET}\n" "$umbrella_direct"
-    printf "    Project tracked: ${YELLOW}\$%.2f${RESET}\n" "$project_current"
-    printf "    Actual cost:     ${GREEN}\$%.2f${RESET}\n" "$actual_cost"
-    echo ""
-
     # Confirm
-    echo -ne "  ${SLATE}Dedicate full \$${actual_cost} to ${project_name}? [y/N]:${RESET} "
+    printf "  ${SLATE}Move \$%.2f from _self to ${child_name}? [y/N]:${RESET} " "$self_amount"
     read -r response
     [[ ! "$response" =~ ^[Yy] ]] && { echo "  Cancelled."; exit 0; }
 
     echo ""
 
-    # Update sub-project: set session contributed to full cost
-    cli_print_info "Updating ${project_name}..."
-    local updated_project=$(jq --arg sid "$session_id" --argjson cost "$actual_cost" '
-        .costs.sessions[$sid].contributed = $cost |
-        .costs.sessions[$sid].dedicated = true |
-        .costs.total = ([.costs.sessions // {} | to_entries[].value.contributed // 0] | add // 0) |
+    # Update session_home: move _self to child in breakdown
+    cli_print_info "Updating ${home_name}..."
+    local updated=$(jq --arg sid "$session_id" --arg child "$child_name" '
+        # Move _self to child
+        .costs.sessions[$sid].breakdown[$child] = ((.costs.sessions[$sid].breakdown[$child] // 0) + (.costs.sessions[$sid].breakdown._self // .costs.sessions[$sid].contributed // 0)) |
+        .costs.sessions[$sid].breakdown._self = 0 |
+        # Recalculate total_cost (should stay the same)
+        .costs.sessions[$sid].total_cost = ([.costs.sessions[$sid].breakdown // {} | to_entries[].value] | add // 0) |
+        .costs.sessions[$sid].updated = (now | todate) |
+        # Update projects tracking
+        .costs.projects[$child].sessions = ((.costs.projects[$child].sessions // []) + [$sid] | unique) |
         .costs.last_updated = (now | todate)
-    ' "$project_config")
-    echo "$updated_project" > "$project_config"
+    ' "$session_home")
+    echo "$updated" > "$session_home"
 
-    local new_project_total=$(echo "$updated_project" | jq -r '.costs.total')
-
-    # Update umbrella: remove from direct sessions, update projects
-    cli_print_info "Updating ${umbrella_name}..."
-    local updated_umbrella=$(jq --arg sid "$session_id" --arg sub "$project_name" --argjson subtotal "$new_project_total" '
-        # Remove session from direct tracking (set to 0, keep for history)
-        .costs.sessions[$sid].contributed = 0 |
-        .costs.sessions[$sid].dedicated_to = $sub |
-        # Update sub-project contribution
-        .costs.projects[$sub].contributed = $subtotal |
-        .costs.projects[$sub].sessions = ((.costs.projects[$sub].sessions // []) + [$sid] | unique) |
-        # Recalculate total
-        .costs.total = (
-            ([.costs.sessions // {} | to_entries[].value.contributed // 0] | add // 0) +
-            ([.costs.projects // {} | to_entries[].value.contributed // 0] | add // 0)
-        ) |
-        .costs.last_updated = (now | todate)
-    ' "$parent_config")
-    echo "$updated_umbrella" > "$parent_config"
-
-    local new_umbrella_total=$(echo "$updated_umbrella" | jq -r '.costs.total')
+    # Show new state
+    local new_self=$(echo "$updated" | jq -r ".costs.sessions[\"$session_id\"].breakdown._self")
+    local new_child=$(echo "$updated" | jq -r ".costs.sessions[\"$session_id\"].breakdown[\"$child_name\"]")
 
     echo ""
-    cli_print_success "Session ${session_id:0:8} dedicated to ${project_name}"
-    printf "  ${GREEN}✓${RESET} Project total: ${BOLD}\$%.2f${RESET}\n" "$new_project_total"
-    printf "  ${GREEN}✓${RESET} Umbrella total: ${BOLD}\$%.2f${RESET}\n" "$new_umbrella_total"
+    cli_print_success "Dedicated _self to ${child_name}"
+    printf "  ${GREEN}✓${RESET} _self:        ${BOLD}\$%.2f${RESET}\n" "$new_self"
+    printf "  ${GREEN}✓${RESET} ${child_name}: ${BOLD}\$%.2f${RESET}\n" "$new_child"
     echo ""
 
     exit 0
@@ -331,13 +412,15 @@ show_cli_help() {
     echo ""
     echo -e "  ${DIM}Usage:${RESET}"
     echo -e "    ${SLATE}(stdin)${RESET}           Normal statusline mode (receives JSON from Claude Code)"
-    echo -e "    ${SLATE}--init-project${RESET}    Create project config in current or specified directory"
+    echo -e "    ${SLATE}--init-master${RESET}     Create MASTER root at ~/.claude (top of hierarchy)"
     echo -e "    ${SLATE}--init-umbrella${RESET}   Create umbrella/parent project config"
+    echo -e "    ${SLATE}--init-project${RESET}    Create project config in current or specified directory"
     echo -e "    ${SLATE}--sync${RESET}            Sync project costs with actual transcript data"
     echo -e "    ${SLATE}--dedicate${RESET}        Dedicate a session's full cost to a project"
     echo -e "    ${SLATE}--help${RESET}            Show this help"
     echo ""
     echo -e "  ${DIM}Examples:${RESET}"
+    echo -e "    ${CYAN}~/.claude/statusline-command.sh --init-master${RESET}"
     echo -e "    ${CYAN}~/.claude/statusline-command.sh --init-umbrella ~/projects${RESET}"
     echo -e "    ${CYAN}~/.claude/statusline-command.sh --init-project${RESET}"
     echo -e "    ${CYAN}~/.claude/statusline-command.sh --sync${RESET}"
@@ -349,6 +432,7 @@ show_cli_help() {
 
 # Handle CLI arguments before reading stdin
 case "${1:-}" in
+    --init-master)   init_master ;;
     --init-umbrella) init_umbrella "${2:-}" ;;
     --init-project)  init_project "${2:-}" ;;
     --sync)          sync_project "${2:-}" ;;
@@ -389,7 +473,7 @@ CONFIG_FILE="$HOME/.claude/statusline-config.json"
 
 # Defaults
 TRACKING_ENABLED=true
-GIT_REPOS_ONLY=true
+AUTO_CREATE_MODE="claude_folder"  # never, git_only, claude_folder, git_and_claude, always
 AUTO_CREATE_UMBRELLA=false
 PULSE_ANIMATION=true
 COST_CYCLING=true
@@ -412,7 +496,9 @@ STALENESS_CRIT=500
 # Load config if exists
 if [[ -f "$CONFIG_FILE" ]]; then
     TRACKING_ENABLED=$(jq -r '.tracking.enabled // true' "$CONFIG_FILE")
-    GIT_REPOS_ONLY=$(jq -r '.tracking.git_repos_only // true' "$CONFIG_FILE")
+
+    AUTO_CREATE_MODE=$(jq -r '.tracking.auto_create_mode // "claude_folder"' "$CONFIG_FILE")
+
     AUTO_CREATE_UMBRELLA=$(jq -r '.tracking.auto_create_umbrella // false' "$CONFIG_FILE")
     PULSE_ANIMATION=$(jq -r '.display.pulse_animation // true' "$CONFIG_FILE")
     COST_CYCLING=$(jq -r '.display.cost_cycling // true' "$CONFIG_FILE")
@@ -443,7 +529,7 @@ fi
 CLAUDE_PLAN="${CLAUDE_PLAN:-$(jq -r '.plan // "api"' "$CONFIG_FILE" 2>/dev/null || echo "api")}"
 
 # ============================================
-# COLORS
+# COLORS (with truecolor detection)
 # ============================================
 RESET='\033[0m'
 DIM='\033[2m'
@@ -452,12 +538,31 @@ B_BLUE='\033[1;34m'
 B_RED='\033[1;31m'
 B_YELLOW='\033[1;33m'
 B_MAGENTA='\033[1;35m'
-# Muted colors (visible but de-emphasized)
-MUTED_SLATE='\033[1;38;2;148;163;184m'  # Bold Slate-400 #94A3B8
 
-HEALTH_GOOD="\033[1;38;2;${HEALTH_GOOD_RGB[0]};${HEALTH_GOOD_RGB[1]};${HEALTH_GOOD_RGB[2]}m"
-HEALTH_WARN="\033[1;38;2;${HEALTH_WARN_RGB[0]};${HEALTH_WARN_RGB[1]};${HEALTH_WARN_RGB[2]}m"
-HEALTH_CRIT="\033[1;38;2;${HEALTH_CRIT_RGB[0]};${HEALTH_CRIT_RGB[1]};${HEALTH_CRIT_RGB[2]}m"
+# Detect truecolor support (iTerm2, Kitty, etc set this)
+TRUECOLOR_SUPPORT=0
+if [[ "$COLORTERM" == "truecolor" || "$COLORTERM" == "24bit" ]]; then
+    TRUECOLOR_SUPPORT=1
+fi
+
+# Muted colors - use 256-color fallback if no truecolor
+if [[ $TRUECOLOR_SUPPORT -eq 1 ]]; then
+    MUTED_SLATE='\033[1;38;2;148;163;184m'  # Bold Slate-400 #94A3B8
+else
+    MUTED_SLATE='\033[1;38;5;248m'  # 256-color approximation
+fi
+
+# Health colors - truecolor or 256-color fallback
+if [[ $TRUECOLOR_SUPPORT -eq 1 ]]; then
+    HEALTH_GOOD="\033[1;38;2;${HEALTH_GOOD_RGB[0]};${HEALTH_GOOD_RGB[1]};${HEALTH_GOOD_RGB[2]}m"
+    HEALTH_WARN="\033[1;38;2;${HEALTH_WARN_RGB[0]};${HEALTH_WARN_RGB[1]};${HEALTH_WARN_RGB[2]}m"
+    HEALTH_CRIT="\033[1;38;2;${HEALTH_CRIT_RGB[0]};${HEALTH_CRIT_RGB[1]};${HEALTH_CRIT_RGB[2]}m"
+else
+    # 256-color palette approximations
+    HEALTH_GOOD='\033[1;38;5;44m'   # Cyan-ish (good)
+    HEALTH_WARN='\033[1;38;5;214m'  # Orange-ish (warning)
+    HEALTH_CRIT='\033[1;38;5;196m'  # Red (critical)
+fi
 
 # Health color helper (reverse=1: higher is worse)
 get_health_color() {
@@ -534,17 +639,37 @@ detect_project() {
     done
 }
 
-# Auto-create project config if in git repo without one
-init_project_if_git() {
+# Auto-create project config based on auto_create_mode
+auto_create_project() {
     [[ "$TRACKING_ENABLED" != "true" ]] && return
+    [[ "$AUTO_CREATE_MODE" == "never" ]] && return
 
     local config="$cwd/.claude/statusline-project.json"
     [[ -f "$config" ]] && return  # Already exists
 
-    # Only auto-create in git repos if git_repos_only is true
-    if [[ "$GIT_REPOS_ONLY" == "true" ]]; then
-        [[ ! -d "$cwd/.git" ]] && return
-    fi
+    # Check conditions based on auto_create_mode
+    local has_git=false has_claude=false
+    [[ -d "$cwd/.git" ]] && has_git=true
+    [[ -d "$cwd/.claude" ]] && has_claude=true
+
+    case "$AUTO_CREATE_MODE" in
+        git_only)
+            [[ "$has_git" != "true" ]] && return
+            ;;
+        claude_folder)
+            [[ "$has_claude" != "true" ]] && return
+            ;;
+        git_and_claude)
+            [[ "$has_git" != "true" || "$has_claude" != "true" ]] && return
+            ;;
+        always)
+            # Always create (will create .claude folder below)
+            ;;
+        *)
+            # Unknown mode, default to claude_folder behavior
+            [[ "$has_claude" != "true" ]] && return
+            ;;
+    esac
 
     mkdir -p "$cwd/.claude" 2>/dev/null || return
     local folder_name=$(basename "$cwd")
@@ -580,7 +705,7 @@ init_project_if_git() {
 EOF
 }
 
-init_project_if_git
+auto_create_project
 project_config=$(detect_project "$cwd")
 
 project_icon="" project_name="" project_root=""
@@ -594,18 +719,20 @@ else
 fi
 
 # ============================================
-# DELTA COST TRACKING
+# DELTA COST TRACKING (Phase 2: Session Attribution)
 # ============================================
-# Track cost changes per project using session state file
+# Session lives WHERE IT STARTED (session_home), with breakdown tracking
+# Format: {cost}|{session_home_config}
+
 state_file="$CACHE_DIR/session-${session_id}.state"
 project_total_cost=0
 display_cycle=$(( $(date +%S) % 10 ))
 
-# Calculate delta since last update
+# Calculate delta and determine session home
 cost_delta="$total_cost"
-last_project=""
+session_home=""  # Where session started (set once, preserved)
 if [[ -f "$state_file" ]]; then
-    IFS='|' read -r last_cost last_project < "$state_file"
+    IFS='|' read -r last_cost session_home < "$state_file"
     if [[ -n "$last_cost" ]] && (( $(echo "$total_cost > $last_cost" | bc -l 2>/dev/null || echo 0) )); then
         cost_delta=$(echo "$total_cost - $last_cost" | bc -l 2>/dev/null || echo "$total_cost")
     else
@@ -613,9 +740,21 @@ if [[ -f "$state_file" ]]; then
     fi
 fi
 
-# Update project costs
+# First render: current project becomes session home
+if [[ -z "$session_home" ]]; then
+    session_home="$project_config"
+fi
+
+# Determine breakdown key: _self if in session_home, else child project name
+breakdown_key="_self"
+if [[ -n "$project_config" && "$project_config" != "$session_home" ]]; then
+    # We're in a different project than where session started
+    breakdown_key=$(jq -r '.name // "unknown"' "$project_config" 2>/dev/null)
+fi
+
+# Update project costs (Phase 2: uses breakdown structure)
 update_project_cost() {
-    local config="$1" amount="$2" sid="$3" plan="$4" is_umbrella="${5:-false}" sub_name="${6:-}"
+    local config="$1" amount="$2" sid="$3" plan="$4" breakdown_key="${5:-_self}" transcript="${6:-}"
     [[ -z "$config" || ! -f "$config" ]] && return
     [[ "$amount" == "0" || -z "$amount" ]] && return
 
@@ -627,56 +766,102 @@ update_project_cost() {
     fi
     mkdir "$lock_dir" 2>/dev/null || return
 
-    if [[ "$is_umbrella" == "true" && -n "$sub_name" ]]; then
-        # Umbrella: SET sub-project total (absolute, not delta) - self-healing
-        local updated=$(jq --arg total "$amount" --arg sid "$sid" --arg plan "$plan" --arg sub "$sub_name" '
-            .costs.projects[$sub].contributed = ($total | tonumber) |
-            .costs.projects[$sub].sessions = ((.costs.projects[$sub].sessions // []) + [$sid] | unique) |
-            .costs.total = (
-                ([.costs.sessions // {} | to_entries[].value.contributed // 0] | add // 0) +
-                ([.costs.projects // {} | to_entries[].value.contributed // 0] | add // 0)
-            ) |
-            .costs.last_updated = (now | todate) |
-            .costs.plan = $plan
-        ' "$config")
-    else
-        # Regular project: track by session (delta-based)
-        local updated=$(jq --arg delta "$amount" --arg sid "$sid" --arg plan "$plan" '
-            .costs.sessions[$sid].contributed = ((.costs.sessions[$sid].contributed // 0) + ($delta | tonumber)) |
-            .costs.sessions[$sid].updated = (now | todate) |
-            # Total = sessions + projects (for umbrellas with direct work)
-            .costs.total = (
-                ([.costs.sessions // {} | to_entries[].value.contributed // 0] | add // 0) +
-                ([.costs.projects // {} | to_entries[].value.contributed // 0] | add // 0)
-            ) |
-            .costs.session_count = ([.costs.sessions // {} | keys[]] | length) |
-            .costs.last_updated = (now | todate) |
-            .costs.plan = $plan |
-            if .costs.tracking_started == null then .costs.tracking_started = (now | todate) else . end
-        ' "$config")
+    # Get session start time from transcript file ctime (macOS: -f %B = birth time)
+    local started_iso=""
+    if [[ -n "$transcript" && -f "$transcript" ]]; then
+        local ctime=$(stat -f %B "$transcript" 2>/dev/null)
+        [[ -n "$ctime" && "$ctime" != "0" ]] && started_iso=$(date -r "$ctime" -u +"%Y-%m-%dT%H:%M:%SZ")
     fi
+
+    # Phase 2: Session with breakdown structure
+    # breakdown_key is either "_self" (work at this level) or child project name
+    local updated=$(jq --arg delta "$amount" --arg sid "$sid" --arg plan "$plan" \
+                       --arg transcript "$transcript" --arg started "$started_iso" \
+                       --arg bkey "$breakdown_key" '
+        # Set started and transcript only on first session creation
+        .costs.sessions[$sid].started = (.costs.sessions[$sid].started // (if $started != "" then $started else null end)) |
+        .costs.sessions[$sid].transcript = (.costs.sessions[$sid].transcript // (if $transcript != "" then $transcript else null end)) |
+
+        # Phase 2: Use breakdown structure instead of contributed
+        # Initialize breakdown object if needed
+        .costs.sessions[$sid].breakdown = (.costs.sessions[$sid].breakdown // {}) |
+        .costs.sessions[$sid].breakdown[$bkey] = ((.costs.sessions[$sid].breakdown[$bkey] // 0) + ($delta | tonumber)) |
+
+        # Calculate total_cost as sum of all breakdown values
+        .costs.sessions[$sid].total_cost = ([.costs.sessions[$sid].breakdown // {} | to_entries[].value] | add // 0) |
+        .costs.sessions[$sid].updated = (now | todate) |
+
+        # Project total = sum of all sessions total_cost + child projects contributed
+        .costs.total = (
+            ([.costs.sessions // {} | to_entries[].value.total_cost // .value.contributed // 0] | add // 0) +
+            ([.costs.projects // {} | to_entries[].value.contributed // 0] | add // 0)
+        ) |
+        .costs.session_count = ([.costs.sessions // {} | keys[]] | length) |
+        .costs.last_updated = (now | todate) |
+        .costs.plan = $plan |
+        if .costs.tracking_started == null then .costs.tracking_started = (now | todate) else . end
+    ' "$config")
+
+    echo "$updated" > "${config}.tmp" && mv "${config}.tmp" "$config"
+    rmdir "$lock_dir" 2>/dev/null
+}
+
+# Update parent project with child's total (for roll-up)
+update_parent_project() {
+    local config="$1" sub_name="$2" sub_total="$3" sid="$4" plan="$5"
+    [[ -z "$config" || ! -f "$config" ]] && return
+
+    local lock_dir="${config}.lock"
+    if [[ -d "$lock_dir" ]]; then
+        local lock_age=$(( $(date +%s) - $(stat -f %m "$lock_dir" 2>/dev/null || echo 0) ))
+        [[ $lock_age -gt 60 ]] && rmdir "$lock_dir" 2>/dev/null
+    fi
+    mkdir "$lock_dir" 2>/dev/null || return
+
+    # Set sub-project total (absolute, self-healing)
+    local updated=$(jq --arg total "$sub_total" --arg sid "$sid" --arg plan "$plan" --arg sub "$sub_name" '
+        .costs.projects[$sub].contributed = ($total | tonumber) |
+        .costs.projects[$sub].sessions = ((.costs.projects[$sub].sessions // []) + [$sid] | unique) |
+        .costs.total = (
+            ([.costs.sessions // {} | to_entries[].value.total_cost // .value.contributed // 0] | add // 0) +
+            ([.costs.projects // {} | to_entries[].value.contributed // 0] | add // 0)
+        ) |
+        .costs.last_updated = (now | todate) |
+        .costs.plan = $plan
+    ' "$config")
 
     echo "$updated" > "${config}.tmp" && mv "${config}.tmp" "$config"
     rmdir "$lock_dir" 2>/dev/null
 }
 
 # Only update on cycle 0 (every ~10s) and if tracking enabled
-if [[ "$TRACKING_ENABLED" == "true" && -n "$project_config" && $display_cycle -eq 0 ]]; then
-    # Update current project with delta
-    update_project_cost "$project_config" "$cost_delta" "$session_id" "$CLAUDE_PLAN" "false"
+if [[ "$TRACKING_ENABLED" == "true" && -n "$session_home" && $display_cycle -eq 0 ]]; then
+    # Phase 2: Update SESSION HOME with delta, using breakdown_key
+    # Session lives where it started, with breakdown tracking where work was done
+    update_project_cost "$session_home" "$cost_delta" "$session_id" "$CLAUDE_PLAN" "$breakdown_key" "$transcript_path"
 
-    # Update parent/umbrella with sub-project's TOTAL (absolute, self-healing)
-    parent_config=$(jq -r '.parent // empty' "$project_config" 2>/dev/null)
-    if [[ -n "$parent_config" && -f "$parent_config" ]]; then
-        sub_project_name=$(jq -r '.name // "unknown"' "$project_config" 2>/dev/null)
-        sub_project_total=$(jq -r '.costs.total // 0' "$project_config" 2>/dev/null)
-        update_project_cost "$parent_config" "$sub_project_total" "$session_id" "$CLAUDE_PLAN" "true" "$sub_project_name"
-    fi
+    # Roll up the entire chain from session_home to MASTER
+    # Each project's total gets reported to its parent
+    rollup_config="$session_home"
+    while [[ -n "$rollup_config" && -f "$rollup_config" ]]; do
+        parent_config=$(jq -r '.parent // empty' "$rollup_config" 2>/dev/null)
+        if [[ -n "$parent_config" && -f "$parent_config" ]]; then
+            sub_project_name=$(jq -r '.name // "unknown"' "$rollup_config" 2>/dev/null)
+            sub_project_total=$(jq -r '.costs.total // 0' "$rollup_config" 2>/dev/null)
+            update_parent_project "$parent_config" "$sub_project_name" "$sub_project_total" "$session_id" "$CLAUDE_PLAN"
+            rollup_config="$parent_config"
+        else
+            break
+        fi
+    done
 
-    # Save state AFTER successful update (prevents delta loss)
-    echo "${total_cost}|${project_config}" > "$state_file"
+    # Save state AFTER successful update - preserve session_home (set once)
+    echo "${total_cost}|${session_home}" > "$state_file"
 
-    project_total_cost=$(jq -r '.costs.total // 0' "$project_config" 2>/dev/null || echo "0")
+    # Get display total from session home
+    project_total_cost=$(jq -r '.costs.total // 0' "$session_home" 2>/dev/null || echo "0")
+elif [[ -n "$session_home" && -f "$session_home" ]]; then
+    project_total_cost=$(jq -r '.costs.total // 0' "$session_home" 2>/dev/null || echo "0")
 elif [[ -n "$project_config" && -f "$project_config" ]]; then
     project_total_cost=$(jq -r '.costs.total // 0' "$project_config" 2>/dev/null || echo "0")
 fi
@@ -1021,7 +1206,7 @@ fi
 
 # Line 4: Duration─Messages─Code─Session
 line_stats="${THEME_PRIMARY}│${RESET} "
-[[ -n "$duration_info" ]] && line_stats+="⧗ ${THEME_ACCENT}${duration_info}${RESET}"
+[[ -n "$duration_info" ]] && line_stats+="⏱ ${THEME_ACCENT}${duration_info}${RESET}"
 [[ $msg_count -gt 0 ]] && line_stats+=" 💬${B_CYAN}$(format_num $msg_count)${RESET}"
 [[ -n "$code_added" ]] && line_stats+=" ${THEME_ACCENT}${code_added}${RESET}${B_RED}${code_removed}${RESET}"
 
@@ -1034,70 +1219,109 @@ fi
 # Line 5: Pulse animation with cache shield
 get_health_rgb $context_pct
 
+# Choose color mode for pulse (256-color fallback for Terminal.app)
+if [[ $TRUECOLOR_SUPPORT -eq 1 ]]; then
+    # Truecolor: use RGB gradients
+    PULSE_THEME="\033[38;2;${THEME_R};${THEME_G};${THEME_B}m"
+    PULSE_END="\033[38;2;${END_R};${END_G};${END_B}m"
+else
+    # 256-color fallback: use THEME_PRIMARY colors (already 256-safe)
+    PULSE_THEME="${THEME_PRIMARY}"
+    # Map health to 256-color
+    if [[ $context_pct -ge $CONTEXT_CRIT ]]; then
+        PULSE_END='\033[38;5;196m'  # Red
+    elif [[ $context_pct -ge $CONTEXT_WARN ]]; then
+        PULSE_END='\033[38;5;214m'  # Orange
+    else
+        PULSE_END='\033[38;5;44m'   # Cyan
+    fi
+fi
+
 if [[ "$PULSE_ANIMATION" == "true" ]]; then
     frame=$(( $(date +%S) % 24 ))
     line_len=26 grad_len=6
     pulse=""
 
-    if ((frame >= 22)); then
-        for ((i=0; i<line_len; i++)); do
-            if ((i < line_len - grad_len)); then
-                pulse+="\033[38;2;${THEME_R};${THEME_G};${THEME_B}m─\033[0m"
-            elif ((i == line_len - grad_len)); then
-                pulse+="\033[38;2;${THEME_R};${THEME_G};${THEME_B}m┉\033[0m"
-            else
-                prog=$((i - (line_len - grad_len)))
-                r=$((THEME_R + (END_R - THEME_R) * prog / grad_len))
-                g=$((THEME_G + (END_G - THEME_G) * prog / grad_len))
-                b=$((THEME_B + (END_B - THEME_B) * prog / grad_len))
-                pulse+="\033[38;2;${r};${g};${b}m━\033[0m"
-            fi
-        done
-        ((frame == 22)) && pulse+="\033[38;2;${END_R};${END_G};${END_B}m◉✦✧·\033[0m" \
-                        || pulse+="\033[38;2;${END_R};${END_G};${END_B}m◉\033[0m${DIM}·✧✦\033[0m"
-    else
-        orb_pos=$((frame + 2))
-        for ((i=0; i<orb_pos; i++)); do
-            dist=$((orb_pos - i))
-            if ((dist > grad_len)); then
-                pulse+="\033[38;2;${THEME_R};${THEME_G};${THEME_B}m─\033[0m"
-            elif ((dist == grad_len)); then
-                pulse+="\033[38;2;${THEME_R};${THEME_G};${THEME_B}m┉\033[0m"
-            else
-                prog=$((grad_len - dist))
-                r=$((THEME_R + (END_R - THEME_R) * prog / grad_len))
-                g=$((THEME_G + (END_G - THEME_G) * prog / grad_len))
-                b=$((THEME_B + (END_B - THEME_B) * prog / grad_len))
-                pulse+="\033[38;2;${r};${g};${b}m━\033[0m"
-            fi
-        done
-        pulse+="\033[38;2;${END_R};${END_G};${END_B}m◉\033[0m"
+    if [[ $TRUECOLOR_SUPPORT -eq 1 ]]; then
+        # Truecolor gradient animation
+        if ((frame >= 22)); then
+            for ((i=0; i<line_len; i++)); do
+                if ((i < line_len - grad_len)); then
+                    pulse+="${PULSE_THEME}─\033[0m"
+                elif ((i == line_len - grad_len)); then
+                    pulse+="${PULSE_THEME}┉\033[0m"
+                else
+                    prog=$((i - (line_len - grad_len)))
+                    r=$((THEME_R + (END_R - THEME_R) * prog / grad_len))
+                    g=$((THEME_G + (END_G - THEME_G) * prog / grad_len))
+                    b=$((THEME_B + (END_B - THEME_B) * prog / grad_len))
+                    pulse+="\033[38;2;${r};${g};${b}m━\033[0m"
+                fi
+            done
+            ((frame == 22)) && pulse+="${PULSE_END}◉✦✧·\033[0m" \
+                            || pulse+="${PULSE_END}◉\033[0m${DIM}·✧✦\033[0m"
+        else
+            orb_pos=$((frame + 2))
+            for ((i=0; i<orb_pos; i++)); do
+                dist=$((orb_pos - i))
+                if ((dist > grad_len)); then
+                    pulse+="${PULSE_THEME}─\033[0m"
+                elif ((dist == grad_len)); then
+                    pulse+="${PULSE_THEME}┉\033[0m"
+                else
+                    prog=$((grad_len - dist))
+                    r=$((THEME_R + (END_R - THEME_R) * prog / grad_len))
+                    g=$((THEME_G + (END_G - THEME_G) * prog / grad_len))
+                    b=$((THEME_B + (END_B - THEME_B) * prog / grad_len))
+                    pulse+="\033[38;2;${r};${g};${b}m━\033[0m"
+                fi
+            done
+            pulse+="${PULSE_END}◉\033[0m"
 
-        remaining=$((line_len - orb_pos))
-        fade_chars=("╸" "╍" "┈")
-        for ((i=0; i<remaining; i++)); do
-            prog=$((i * 100 / (remaining > 0 ? remaining : 1)))
-            r=$((END_R + (THEME_R - END_R) * prog / 100))
-            g=$((END_G + (THEME_G - END_G) * prog / 100))
-            b=$((END_B + (THEME_B - END_B) * prog / 100))
-            ((i < 3)) && pulse+="\033[38;2;${r};${g};${b}m${fade_chars[$i]}\033[0m" \
-                      || pulse+="\033[38;2;${r};${g};${b}m─\033[0m"
-        done
+            remaining=$((line_len - orb_pos))
+            fade_chars=("╸" "╍" "┈")
+            for ((i=0; i<remaining; i++)); do
+                prog=$((i * 100 / (remaining > 0 ? remaining : 1)))
+                r=$((END_R + (THEME_R - END_R) * prog / 100))
+                g=$((END_G + (THEME_G - END_G) * prog / 100))
+                b=$((END_B + (THEME_B - END_B) * prog / 100))
+                ((i < 3)) && pulse+="\033[38;2;${r};${g};${b}m${fade_chars[$i]}\033[0m" \
+                          || pulse+="\033[38;2;${r};${g};${b}m─\033[0m"
+            done
+        fi
+    else
+        # 256-color simplified animation (no gradient, just moving orb)
+        if ((frame >= 22)); then
+            for ((i=0; i<line_len; i++)); do
+                pulse+="${PULSE_THEME}─${RESET}"
+            done
+            ((frame == 22)) && pulse+="${PULSE_END}◉✦✧·${RESET}" \
+                            || pulse+="${PULSE_END}◉${RESET}${DIM}·✧✦${RESET}"
+        else
+            orb_pos=$((frame + 2))
+            for ((i=0; i<orb_pos; i++)); do
+                pulse+="${PULSE_THEME}─${RESET}"
+            done
+            pulse+="${PULSE_END}◉${RESET}"
+            for ((i=orb_pos+1; i<line_len; i++)); do
+                pulse+="${PULSE_THEME}─${RESET}"
+            done
+        fi
     fi
 else
     # Static line if animation disabled
     pulse=""
     for ((i=0; i<26; i++)); do
-        pulse+="\033[38;2;${THEME_R};${THEME_G};${THEME_B}m─\033[0m"
+        pulse+="${PULSE_THEME}─${RESET}"
     done
 fi
 
-line_pulse="${THEME_PRIMARY}╰${RESET}\033[38;2;${THEME_R};${THEME_G};${THEME_B}m─\033[0m${pulse}"
+line_pulse="${THEME_PRIMARY}╰${RESET}${PULSE_THEME}─${RESET}${pulse}"
 [[ $cache_pct -gt 0 ]] && line_pulse+=" ${context_color}🛡 ${cache_pct}%${RESET}" || line_pulse+=" ${MUTED_SLATE}🛡 ─${RESET}"
 
-# Output
+# Output (ensure clean terminal state with final RESET)
 echo -e "$line1"
 echo -e "$line2"
 [[ -n "$line_git" ]] && echo -e "$line_git"
 echo -e "$line_stats"
-echo -e "$line_pulse"
+echo -e "${line_pulse}${RESET}"

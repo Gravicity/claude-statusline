@@ -1,0 +1,31 @@
+{
+  "name": "Claude Master Statusline",
+  "icon": "🏠",
+  "color": "#8B5CF6",
+  "git": null,
+  "parent": null,
+  "costs": {
+    "sessions": {
+      "def67890-1234-5678-abcd-ef0123456789": {
+        "started": "2025-11-30T14:00:00Z",
+        "transcript": "/Users/user/.claude/projects/-Users-user/def67890-1234-5678-abcd-ef0123456789.jsonl",
+        "breakdown": {
+          "_self": 2.50
+        },
+        "total_cost": 2.50,
+        "updated": "2025-11-30T15:00:00Z"
+      }
+    },
+    "total": 65.00,
+    "session_count": 1,
+    "projects": {
+      "My Projects": {
+        "contributed": 62.50,
+        "sessions": ["abc12345-6789-abcd-ef01-234567890abc"]
+      }
+    },
+    "last_updated": "2025-11-30T15:00:00Z",
+    "plan": "api",
+    "tracking_started": "2025-11-30T14:00:00Z"
+  }
+}

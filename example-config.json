@@ -3,7 +3,7 @@
   "plan": "api",
   "tracking": {
     "enabled": true,
-    "git_repos_only": true,
+    "auto_create_mode": "claude_folder",
     "auto_create_umbrella": false
   },
   "display": {

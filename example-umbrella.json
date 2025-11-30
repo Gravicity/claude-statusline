@@ -1,24 +1,37 @@
 {
-  "name": "Gravicity Projects",
+  "name": "My Projects",
   "icon": "🌌",
-  "color": null,
+  "color": "#6366F1",
   "git": null,
-  "parent": null,
+  "parent": "/Users/user/.claude/statusline-project.json",
   "costs": {
-    "total": 87.50,
+    "sessions": {
+      "abc12345-6789-abcd-ef01-234567890abc": {
+        "started": "2025-11-30T08:00:00Z",
+        "transcript": "/Users/user/.claude/projects/-Users-user-projects/abc12345-6789-abcd-ef01-234567890abc.jsonl",
+        "breakdown": {
+          "_self": 5.00,
+          "my-app": 45.30,
+          "api-server": 12.20
+        },
+        "total_cost": 62.50,
+        "updated": "2025-11-30T14:00:00Z"
+      }
+    },
+    "total": 62.50,
+    "session_count": 1,
     "projects": {
       "my-app": {
-        "contributed": 12.45,
-        "sessions": ["abc123", "def456"]
+        "contributed": 45.30,
+        "sessions": ["abc12345-6789-abcd-ef01-234567890abc"]
       },
       "api-server": {
-        "contributed": 45.30,
-        "sessions": ["ghi789", "jkl012"]
-      },
-      "dashboard": {
-        "contributed": 29.75,
-        "sessions": ["mno345"]
+        "contributed": 12.20,
+        "sessions": ["abc12345-6789-abcd-ef01-234567890abc"]
       }
-    }
+    },
+    "last_updated": "2025-11-30T14:00:00Z",
+    "plan": "api",
+    "tracking_started": "2025-11-30T08:00:00Z"
   }
 }

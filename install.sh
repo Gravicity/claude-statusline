@@ -11,16 +11,27 @@ RESET='\033[0m'
 BOLD='\033[1m'
 DIM='\033[2m'
 
-# Theme colors (RGB)
-PURPLE='\033[1;38;2;139;92;246m'      # Opus
-ORANGE='\033[1;38;2;255;140;0m'       # Sonnet
-TEAL='\033[1;38;2;0;188;212m'         # Haiku
-SLATE='\033[1;38;2;148;163;184m'      # Muted
-
-# Health colors
-GREEN='\033[1;38;2;34;197;94m'
-YELLOW='\033[1;38;2;234;179;8m'
-RED='\033[1;38;2;239;68;68m'
+# Detect truecolor support
+if [[ "$COLORTERM" == "truecolor" || "$COLORTERM" == "24bit" ]]; then
+    # Theme colors (RGB)
+    PURPLE='\033[1;38;2;139;92;246m'      # Opus
+    ORANGE='\033[1;38;2;255;140;0m'       # Sonnet
+    TEAL='\033[1;38;2;0;188;212m'         # Haiku
+    SLATE='\033[1;38;2;148;163;184m'      # Muted
+    # Health colors
+    GREEN='\033[1;38;2;34;197;94m'
+    YELLOW='\033[1;38;2;234;179;8m'
+    RED='\033[1;38;2;239;68;68m'
+else
+    # 256-color fallback
+    PURPLE='\033[1;38;5;141m'
+    ORANGE='\033[1;38;5;208m'
+    TEAL='\033[1;38;5;44m'
+    SLATE='\033[1;38;5;248m'
+    GREEN='\033[1;38;5;35m'
+    YELLOW='\033[1;38;5;220m'
+    RED='\033[1;38;5;196m'
+fi
 
 # Standard
 CYAN='\033[1;36m'
@@ -38,13 +49,15 @@ INSTALL_DIR="$HOME/.claude"
 SCRIPT_NAME="statusline-command.sh"
 CONFIG_NAME="statusline-config.json"
 SETTINGS_FILE="$HOME/.claude/settings.json"
+MASTER_CONFIG="$HOME/.claude/statusline-project.json"
 
 # ============================================
 # DEFAULTS
 # ============================================
 PLAN="api"
 TRACKING_ENABLED=true
-GIT_REPOS_ONLY=true
+AUTO_CREATE_MODE="claude_folder"  # never, git_only, claude_folder, git_and_claude, always
+CREATE_MASTER=true
 CREATE_UMBRELLA=false
 PULSE_ANIMATION=true
 COST_CYCLING=true
@@ -140,9 +153,9 @@ print_option() {
 print_preview() {
     echo -e "  ${DIM}Preview:${RESET}"
     echo -e "  ${PURPLE}╭─${PURPLE}Opus${PURPLE}─${PURPLE}4.5${PURPLE}─${RESET}🧠${PURPLE}─${GREEN}32%${PURPLE}─${RESET}📚${PURPLE}─${GREEN}2${PURPLE}─${RESET}💰${PURPLE}12.50/hr${RESET}"
-    echo -e "  ${PURPLE}│${RESET} 📁 ${CYAN}~/my-project${RESET}"
-    echo -e "  ${PURPLE}│${RESET} ${BLUE}⊛ main${RESET} ${GREEN}↑2${RESET} ${GREEN}●3${RESET} ${YELLOW}~5${RESET} ${SLATE}?7${RESET} ${GREEN}12m${RESET}"
-    echo -e "  ${PURPLE}│${RESET} ⧗ ${PURPLE}45m${RESET} 💬 ${CYAN}12${RESET} ${PURPLE}+156${RED}-23${RESET} ${PURPLE}※ a1b2c3${RESET}"
+    echo -e "  ${PURPLE}│${RESET} 📁 ${CYAN}my-project${RESET}"
+    echo -e "  ${PURPLE}│${RESET} ${BLUE}⚙ main${RESET} ${GREEN}↑2${RESET} ${GREEN}●3${RESET} ${YELLOW}~5${RESET} ${SLATE}?7${RESET} ${GREEN}12m${RESET}"
+    echo -e "  ${PURPLE}│${RESET} ⏱ ${PURPLE}45m${RESET} 💬${CYAN}12${RESET} ${PURPLE}+156${RED}-23${RESET} ${PURPLE}※a1b2c3${RESET}"
     echo -e "  ${PURPLE}╰─${RESET}$(print_pulse 38) ${GREEN}🛡 94%${RESET}"
     echo ""
 }
@@ -154,7 +167,8 @@ print_complete() {
     echo -e "  ${GREEN}│${RESET}  ${DIM}Installed:${RESET}"
     echo -e "  ${GREEN}│${RESET}    ${SLATE}•${RESET} ${CYAN}~/.claude/statusline-command.sh${RESET}"
     echo -e "  ${GREEN}│${RESET}    ${SLATE}•${RESET} ${CYAN}~/.claude/statusline-config.json${RESET}"
-    [[ "$CREATE_UMBRELLA" == "true" ]] && echo -e "  ${GREEN}│${RESET}    ${SLATE}•${RESET} ${CYAN}.claude/statusline-project.json${RESET}"
+    [[ -f "$MASTER_CONFIG" ]] && echo -e "  ${GREEN}│${RESET}    ${SLATE}•${RESET} ${CYAN}~/.claude/statusline-project.json${RESET} ${DIM}(MASTER)${RESET}"
+    [[ "$CREATE_UMBRELLA" == "true" ]] && echo -e "  ${GREEN}│${RESET}    ${SLATE}•${RESET} ${CYAN}.claude/statusline-project.json${RESET} ${DIM}(umbrella)${RESET}"
     echo -e "  ${GREEN}│${RESET}"
     echo -e "  ${GREEN}╰─${RESET} ${YELLOW}Restart Claude Code to see your statusline${RESET}"
     echo ""
@@ -233,7 +247,7 @@ ask_choice() {
 # ============================================
 
 interactive_setup() {
-    print_step 1 6 "Claude Plan"
+    print_step 1 7 "Claude Plan"
     echo -e "      ${DIM}Affects cost calculations${RESET}"
     local plan_choice
     plan_choice=$(ask_choice "Select your plan:" "api - Pay per use" "max5x - Pro 5x" "max20x - Pro 20x")
@@ -244,7 +258,7 @@ interactive_setup() {
     esac
     print_success "Plan: ${ORANGE}$PLAN${RESET}"
 
-    print_step 2 6 "Cost Tracking"
+    print_step 2 7 "Cost Tracking"
     if ask_yes_no "Track costs per project?"; then
         TRACKING_ENABLED=true
         print_success "Cost tracking ${GREEN}enabled${RESET}"
@@ -254,28 +268,54 @@ interactive_setup() {
     fi
 
     if [[ "$TRACKING_ENABLED" == "true" ]]; then
-        print_step 3 6 "Auto-Create Settings"
-        echo -e "      ${DIM}Where to auto-create project configs${RESET}"
-        if ask_yes_no "Only in git repos? ${DIM}(recommended)${RESET}"; then
-            GIT_REPOS_ONLY=true
-            print_success "Git repos only"
+        print_step 3 7 "MASTER Root"
+        echo -e "      ${DIM}Global tracker at ~/.claude/ - catches all projects without a parent${RESET}"
+        if [[ -f "$MASTER_CONFIG" ]]; then
+            print_info "MASTER already exists: ${CYAN}$MASTER_CONFIG${RESET}"
+            CREATE_MASTER=false
         else
-            GIT_REPOS_ONLY=false
-            print_warn "Will create in any folder"
+            echo -e "      ${DIM}Tracks total Claude usage across ALL projects${RESET}"
+            echo -e "      ${DIM}Skip if you want isolated project groups instead${RESET}"
+            if ask_yes_no "Create MASTER root? ${DIM}(recommended)${RESET}"; then
+                CREATE_MASTER=true
+                print_success "Will create MASTER root"
+            else
+                CREATE_MASTER=false
+                print_info "Skipped - projects won't roll up to global tracker"
+            fi
         fi
 
-        print_step 4 6 "Umbrella Project"
+        print_step 4 7 "Auto-Create Settings"
+        echo -e "      ${DIM}When to auto-create statusline project configs${RESET}"
+        echo -e "      ${DIM}(Projects are 'born' into the tree when conditions are met)${RESET}"
+        local mode_choice
+        mode_choice=$(ask_choice "Auto-create mode:" \
+            "claude_folder - When .claude/ folder exists (default)" \
+            "git_only - Only in git repositories" \
+            "git_and_claude - Both git repo AND .claude/ required" \
+            "never - Manual only (use --init)")
+        case "$mode_choice" in
+            "claude_folder"*) AUTO_CREATE_MODE="claude_folder" ;;
+            "git_only"*) AUTO_CREATE_MODE="git_only" ;;
+            "git_and_claude"*) AUTO_CREATE_MODE="git_and_claude" ;;
+            "never"*) AUTO_CREATE_MODE="never" ;;
+        esac
+        print_success "Auto-create: ${ORANGE}$AUTO_CREATE_MODE${RESET}"
+
+        print_step 5 7 "Umbrella Project"
         echo -e "      ${DIM}Track costs across sub-projects in current dir${RESET}"
         if ask_yes_no "Create umbrella project here?" "n"; then
             CREATE_UMBRELLA=true
             print_success "Will create umbrella config"
         fi
     else
-        print_step 3 6 "Skipped ${DIM}(tracking disabled)${RESET}"
-        print_step 4 6 "Skipped ${DIM}(tracking disabled)${RESET}"
+        print_step 3 7 "Skipped ${DIM}(tracking disabled)${RESET}"
+        print_step 4 7 "Skipped ${DIM}(tracking disabled)${RESET}"
+        print_step 5 7 "Skipped ${DIM}(tracking disabled)${RESET}"
+        CREATE_MASTER=false
     fi
 
-    print_step 5 6 "Display Options"
+    print_step 6 7 "Display Options"
     if ask_yes_no "Enable pulse animation?"; then
         PULSE_ANIMATION=true
     else
@@ -288,7 +328,7 @@ interactive_setup() {
     fi
     print_success "Animation: $([ "$PULSE_ANIMATION" == "true" ] && echo "${GREEN}on${RESET}" || echo "${SLATE}off${RESET}"), Cycling: $([ "$COST_CYCLING" == "true" ] && echo "${GREEN}on${RESET}" || echo "${SLATE}off${RESET}")"
 
-    print_step 6 6 "Install"
+    print_step 7 7 "Install"
 }
 
 create_config() {
@@ -300,7 +340,7 @@ create_config() {
   "plan": "$PLAN",
   "tracking": {
     "enabled": $TRACKING_ENABLED,
-    "git_repos_only": $GIT_REPOS_ONLY,
+    "auto_create_mode": "$AUTO_CREATE_MODE",
     "auto_create_umbrella": false
   },
   "display": {
@@ -326,6 +366,29 @@ create_config() {
 EOF
 
     print_success "Config saved"
+}
+
+create_master() {
+    [[ "$CREATE_MASTER" != "true" ]] && return
+    [[ -f "$MASTER_CONFIG" ]] && return  # Already exists
+
+    cat > "$MASTER_CONFIG" << 'EOF'
+{
+  "name": "Claude Master Statusline",
+  "icon": "🏠",
+  "color": "#8B5CF6",
+  "git": null,
+  "parent": null,
+  "costs": {
+    "sessions": {},
+    "total": 0,
+    "session_count": 0,
+    "projects": {}
+  }
+}
+EOF
+
+    print_success "MASTER root created: ${CYAN}~/.claude/statusline-project.json${RESET}"
 }
 
 create_umbrella() {
@@ -400,7 +463,7 @@ EOF
 # PROJECT INIT FUNCTIONS
 # ============================================
 
-# Find parent umbrella project
+# Find parent umbrella project (falls back to MASTER)
 find_parent_umbrella() {
     local dir="$1"
     local parent_dir=$(dirname "$dir")
@@ -413,6 +476,41 @@ find_parent_umbrella() {
         parent_dir=$(dirname "$parent_dir")
         ((depth++))
     done
+    # Fall back to MASTER if it exists
+    [[ -f "$MASTER_CONFIG" ]] && echo "$MASTER_CONFIG"
+}
+
+# Initialize MASTER root at ~/.claude
+init_master_project() {
+    echo ""
+    if [[ -f "$MASTER_CONFIG" ]]; then
+        print_warn "MASTER root already exists: $MASTER_CONFIG"
+        if ! ask_yes_no "Overwrite?" "n"; then
+            exit 0
+        fi
+    fi
+
+    mkdir -p "$INSTALL_DIR" || { print_error "Cannot create ~/.claude directory"; exit 1; }
+
+    cat > "$MASTER_CONFIG" << 'EOF'
+{
+  "name": "Claude Master Statusline",
+  "icon": "🏠",
+  "color": "#8B5CF6",
+  "git": null,
+  "parent": null,
+  "costs": {
+    "sessions": {},
+    "total": 0,
+    "session_count": 0,
+    "projects": {}
+  }
+}
+EOF
+
+    print_success "Created MASTER root: ${CYAN}$MASTER_CONFIG${RESET}"
+    print_info "All projects without a closer parent will roll up here"
+    echo ""
 }
 
 # Initialize umbrella project
@@ -434,17 +532,22 @@ init_umbrella_project() {
 
     local folder_name=$(basename "$target")
 
+    # Link to MASTER if it exists
+    local parent_json="null"
+    [[ -f "$MASTER_CONFIG" ]] && parent_json="\"$MASTER_CONFIG\""
+
     cat > "$config" << EOF
 {
   "name": "$folder_name",
   "icon": "🌌",
   "color": null,
   "git": null,
-  "parent": null
+  "parent": $parent_json
 }
 EOF
 
     print_success "Created umbrella project: ${CYAN}$config${RESET}"
+    [[ -f "$MASTER_CONFIG" ]] && print_info "Linked to MASTER: ${CYAN}$MASTER_CONFIG${RESET}"
     print_info "Sub-projects in ${CYAN}$target/*${RESET} will auto-link to this umbrella"
     echo ""
 }
@@ -506,6 +609,7 @@ case "${1:-}" in
         check_dependencies
         install_script
         create_config
+        create_master
         print_complete
         ;;
     --update)
@@ -523,6 +627,9 @@ case "${1:-}" in
         print_success "Uninstalled"
         print_info "Remove 'statusLine' from settings.json manually"
         echo ""
+        ;;
+    --init-master)
+        init_master_project
         ;;
     --init-umbrella)
         init_umbrella_project "${2:-}"
@@ -542,17 +649,19 @@ case "${1:-}" in
         echo -e "    ${SLATE}--update${RESET}        Update script only"
         echo -e "    ${SLATE}--uninstall${RESET}     Remove everything"
         echo ""
-        echo -e "  ${DIM}Project Options:${RESET}"
-        echo -e "    ${SLATE}--init-umbrella [path]${RESET}  Create umbrella/parent project"
-        echo -e "    ${SLATE}--init-project [path]${RESET}   Create project (auto-links to umbrella)"
+        echo -e "  ${DIM}Project Hierarchy:${RESET}"
+        echo -e "    ${SLATE}--init-master${RESET}           Create MASTER root (~/.claude) - tracks all usage"
+        echo -e "    ${SLATE}--init-umbrella [path]${RESET}  Create umbrella project (links to MASTER)"
+        echo -e "    ${SLATE}--init-project [path]${RESET}   Create sub-project (links to umbrella/MASTER)"
         echo ""
         echo -e "  ${DIM}Other:${RESET}"
         echo -e "    ${SLATE}--preview${RESET}       Preview statusline appearance"
         echo -e "    ${SLATE}--help${RESET}          Show this help"
         echo ""
         echo -e "  ${DIM}Examples:${RESET}"
-        echo -e "    ${CYAN}./install.sh${RESET}                          ${DIM}# Interactive install${RESET}"
-        echo -e "    ${CYAN}./install.sh --init-umbrella ~/projects${RESET}  ${DIM}# Create umbrella${RESET}"
+        echo -e "    ${CYAN}./install.sh${RESET}                            ${DIM}# Interactive install${RESET}"
+        echo -e "    ${CYAN}./install.sh --init-master${RESET}              ${DIM}# Create MASTER root${RESET}"
+        echo -e "    ${CYAN}./install.sh --init-umbrella ~/projects${RESET} ${DIM}# Create umbrella${RESET}"
         echo -e "    ${CYAN}./install.sh --init-project ~/projects/app${RESET} ${DIM}# Create project${RESET}"
         echo ""
         ;;
@@ -567,6 +676,7 @@ case "${1:-}" in
         interactive_setup
         install_script
         create_config
+        create_master
         create_umbrella
         update_settings
         print_complete

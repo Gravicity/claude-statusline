@@ -5,16 +5,21 @@
   "git": "https://github.com/user/my-app",
   "parent": "/Users/user/projects/.claude/statusline-project.json",
   "costs": {
-    "total": 12.45,
     "sessions": {
-      "abc123": {
-        "contributed": 8.20,
-        "plan": "api"
-      },
-      "def456": {
-        "contributed": 4.25,
-        "plan": "api"
+      "abc12345-6789-abcd-ef01-234567890abc": {
+        "started": "2025-11-30T10:00:00Z",
+        "transcript": "/Users/user/.claude/projects/-Users-user-projects-my-app/abc12345-6789-abcd-ef01-234567890abc.jsonl",
+        "breakdown": {
+          "_self": 8.20
+        },
+        "total_cost": 8.20,
+        "updated": "2025-11-30T12:30:00Z"
       }
-    }
+    },
+    "total": 8.20,
+    "session_count": 1,
+    "last_updated": "2025-11-30T12:30:00Z",
+    "plan": "api",
+    "tracking_started": "2025-11-30T10:00:00Z"
   }
 }

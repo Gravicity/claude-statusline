@@ -1,5 +1,99 @@
 # Phase 2: Session Attribution Model
 
+## Implementation Status: ✅ COMPLETE (2025-11-30)
+
+All core Phase 2 features have been implemented:
+- [x] MASTER root at ~/.claude/statusline-project.json
+- [x] Hierarchy: MASTER → Umbrella → Sub-projects
+- [x] Session `started` timestamp from transcript ctime
+- [x] Breakdown structure (`_self`, child names)
+- [x] Session home tracking (set once in state file)
+- [x] Chain roll-up (child → parent → MASTER)
+- [x] Updated `--dedicate` for breakdown model
+- [x] Updated `--sync` with migration support
+- [x] Documentation updated
+
+### Additional Updates (2025-11-30)
+- [x] Terminal color compatibility - 256-color fallback implemented
+- [x] Duration icon changed from `⧗` to `⏱` for better compatibility
+- [x] install.sh updated with MASTER creation (step 3/7 in interactive flow)
+- [x] install.sh 256-color fallback for Terminal.app users
+- [x] Example JSON files updated (example-master.json, example-umbrella.json, example-project.json)
+- [x] README updated with hierarchy documentation and examples table
+- [x] `auto_create_mode` config option replacing `git_repos_only` (5 modes: never, git_only, claude_folder, git_and_claude, always)
+- [x] Config file now optional - sensible defaults used when absent
+- [x] QUICKSTART.md documentation created
+
+### All Issues Resolved
+- [x] Test new session tracking from MASTER level (working)
+
+## Terminal Issues (Discovered 2025-11-30)
+
+### Problem: macOS Terminal.app Doesn't Support Truecolor
+
+**Symptoms:**
+- Yellow/red background bleeding into terminal
+- Colors appearing as white or incorrect shades
+- Background color persisting after statusline output
+
+**Root Cause:**
+macOS Terminal.app only supports 256-color palette, NOT 24-bit truecolor (16 million colors).
+
+**How Truecolor Works:**
+```bash
+# Truecolor escape sequences (require terminal support)
+\x1b[38;2;R;G;Bm   # Foreground color (R,G,B = 0-255)
+\x1b[48;2;R;G;Bm   # Background color
+```
+
+When Terminal.app receives these sequences, it attempts to map them to its 256-color palette, often with poor results:
+- Pure red `(255,0,0)` → appears white or incorrect
+- Purple `(139,92,246)` → maps reasonably well
+- Green `(34,197,94)` → maps reasonably well
+- Orange/yellow `(249,115,22)` → fails badly
+
+**Detection:**
+```bash
+# Check $COLORTERM - should be "truecolor" or "24bit"
+echo $COLORTERM  # Terminal.app: empty or missing
+
+# Check $TERM
+echo $TERM       # Terminal.app: xterm-256color (misleading name)
+```
+
+**Solutions:**
+
+1. **Install a Truecolor Terminal** (Recommended):
+   - iTerm2: `brew install --cask iterm2`
+   - Kitty: `brew install --cask kitty`
+   - Alacritty: `brew install --cask alacritty`
+   - WezTerm: `brew install --cask wezterm`
+
+2. **Add 256-color Fallback** (Future enhancement):
+   ```bash
+   # Detect truecolor support
+   if [[ "$COLORTERM" == "truecolor" || "$COLORTERM" == "24bit" ]]; then
+       # Use RGB colors
+       color="\x1b[38;2;${r};${g};${b}m"
+   else
+       # Fall back to 256-color palette
+       color="\x1b[38;5;${palette_index}m"
+   fi
+   ```
+
+**Implemented Fix (2025-11-30):**
+Script now detects `$COLORTERM` environment variable:
+- If `truecolor` or `24bit`: Uses full RGB gradients
+- Otherwise: Falls back to 256-color palette codes
+
+256-color fallback includes:
+- CLI colors (purple, green, yellow, slate)
+- Health colors (good/warn/crit)
+- Muted slate for disabled indicators
+- Simplified pulse animation (no gradient, just moving orb)
+
+The THEME_PRIMARY and THEME_ACCENT were already using 256-color codes, so model theming works in both modes.
+
 ## Problem Statement
 Current tracking has issues:
 1. Session records duplicated across parent and child projects
