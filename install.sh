@@ -421,14 +421,23 @@ EOF
 install_script() {
     mkdir -p "$INSTALL_DIR"
 
+    local target="$INSTALL_DIR/$SCRIPT_NAME"
+
+    # Backup existing script before overwriting
+    if [[ -f "$target" ]]; then
+        local backup="${target}.backup-$(date +%Y%m%d-%H%M%S)"
+        cp "$target" "$backup"
+        print_info "Backed up existing script to ${DIM}$(basename "$backup")${RESET}"
+    fi
+
     if [[ -f "$SCRIPT_DIR/$SCRIPT_NAME" ]]; then
-        cp "$SCRIPT_DIR/$SCRIPT_NAME" "$INSTALL_DIR/$SCRIPT_NAME"
+        cp "$SCRIPT_DIR/$SCRIPT_NAME" "$target"
     else
         print_error "Script not found: $SCRIPT_DIR/$SCRIPT_NAME"
         exit 1
     fi
 
-    chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
+    chmod +x "$target"
     print_success "Script installed"
 }
 
