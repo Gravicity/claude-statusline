@@ -507,27 +507,30 @@ if [[ -f "$state_file" ]]; then
     fi
 fi
 
-# Update project costs with delta
+# Update project costs
 update_project_cost() {
-    local config="$1" delta="$2" sid="$3" plan="$4" is_umbrella="${5:-false}" sub_name="${6:-}"
+    local config="$1" amount="$2" sid="$3" plan="$4" is_umbrella="${5:-false}" sub_name="${6:-}"
     [[ -z "$config" || ! -f "$config" ]] && return
-    [[ "$delta" == "0" || -z "$delta" ]] && return
+    [[ "$amount" == "0" || -z "$amount" ]] && return
 
     local lock_dir="${config}.lock"
     mkdir "$lock_dir" 2>/dev/null || return
 
     if [[ "$is_umbrella" == "true" && -n "$sub_name" ]]; then
-        # Umbrella: track by sub-project
-        local updated=$(jq --arg delta "$delta" --arg sid "$sid" --arg plan "$plan" --arg sub "$sub_name" '
-            .costs.projects[$sub].contributed = ((.costs.projects[$sub].contributed // 0) + ($delta | tonumber)) |
+        # Umbrella: SET sub-project total (absolute, not delta) - self-healing
+        local updated=$(jq --arg total "$amount" --arg sid "$sid" --arg plan "$plan" --arg sub "$sub_name" '
+            .costs.projects[$sub].contributed = ($total | tonumber) |
             .costs.projects[$sub].sessions = ((.costs.projects[$sub].sessions // []) + [$sid] | unique) |
-            .costs.total = ([.costs.projects // {} | to_entries[].value.contributed // 0] | add // 0) |
+            .costs.total = (
+                ([.costs.sessions // {} | to_entries[].value.contributed // 0] | add // 0) +
+                ([.costs.projects // {} | to_entries[].value.contributed // 0] | add // 0)
+            ) |
             .costs.last_updated = (now | todate) |
             .costs.plan = $plan
         ' "$config")
     else
-        # Regular project: track by session
-        local updated=$(jq --arg delta "$delta" --arg sid "$sid" --arg plan "$plan" '
+        # Regular project: track by session (delta-based)
+        local updated=$(jq --arg delta "$amount" --arg sid "$sid" --arg plan "$plan" '
             .costs.sessions[$sid].contributed = ((.costs.sessions[$sid].contributed // 0) + ($delta | tonumber)) |
             .costs.sessions[$sid].updated = (now | todate) |
             # Total = sessions + projects (for umbrellas with direct work)
@@ -551,11 +554,12 @@ if [[ "$TRACKING_ENABLED" == "true" && -n "$project_config" && $display_cycle -e
     # Update current project with delta
     update_project_cost "$project_config" "$cost_delta" "$session_id" "$CLAUDE_PLAN" "false"
 
-    # Update parent/umbrella with delta (tracked by sub-project name)
+    # Update parent/umbrella with sub-project's TOTAL (absolute, self-healing)
     parent_config=$(jq -r '.parent // empty' "$project_config" 2>/dev/null)
     if [[ -n "$parent_config" && -f "$parent_config" ]]; then
         sub_project_name=$(jq -r '.name // "unknown"' "$project_config" 2>/dev/null)
-        update_project_cost "$parent_config" "$cost_delta" "$session_id" "$CLAUDE_PLAN" "true" "$sub_project_name"
+        sub_project_total=$(jq -r '.costs.total // 0' "$project_config" 2>/dev/null)
+        update_project_cost "$parent_config" "$sub_project_total" "$session_id" "$CLAUDE_PLAN" "true" "$sub_project_name"
     fi
 
     # Save state AFTER successful update (prevents delta loss)
