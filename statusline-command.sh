@@ -769,20 +769,38 @@ if [[ -n "$project_config" && "$project_config" != "$session_home" ]]; then
     breakdown_key=$(jq -r '.name // "unknown"' "$project_config" 2>/dev/null)
 fi
 
+# --- File Locking ---
+# Atomic lock acquisition with 1s stale cleanup and single retry
+# Actual file updates take ~25-50ms, so 1s stale is 20-40x margin
+acquire_lock() {
+    local lock_dir="$1"
+
+    # Clean stale locks (>= 1 second old - crashed/abandoned)
+    if [[ -d "$lock_dir" ]]; then
+        local lock_age=$(( $(date +%s) - $(stat -f %m "$lock_dir" 2>/dev/null || echo 0) ))
+        [[ $lock_age -ge 1 ]] && rmdir "$lock_dir" 2>/dev/null
+    fi
+
+    # Try to acquire, retry once after 200ms if busy
+    mkdir "$lock_dir" 2>/dev/null && return 0
+    sleep 0.2
+    mkdir "$lock_dir" 2>/dev/null && return 0
+
+    return 1  # Failed after retry
+}
+
+release_lock() {
+    rmdir "$1" 2>/dev/null
+}
+
 # Update session cost in project config using breakdown structure
-# Uses atomic file locking with 60s stale lock cleanup
 update_project_cost() {
     local config="$1" amount="$2" sid="$3" plan="$4" breakdown_key="${5:-_self}" transcript="${6:-}"
     [[ -z "$config" || ! -f "$config" ]] && return
     [[ "$amount" == "0" || -z "$amount" ]] && return
 
     local lock_dir="${config}.lock"
-    # Remove stale locks (older than 60 seconds)
-    if [[ -d "$lock_dir" ]]; then
-        local lock_age=$(( $(date +%s) - $(stat -f %m "$lock_dir" 2>/dev/null || echo 0) ))
-        [[ $lock_age -gt 60 ]] && rmdir "$lock_dir" 2>/dev/null
-    fi
-    mkdir "$lock_dir" 2>/dev/null || return
+    acquire_lock "$lock_dir" || return
 
     # Get session start time from transcript file ctime (macOS: -f %B = birth time)
     local started_iso=""
@@ -821,7 +839,7 @@ update_project_cost() {
     ' "$config")
 
     echo "$updated" > "${config}.tmp" && mv "${config}.tmp" "$config"
-    rmdir "$lock_dir" 2>/dev/null
+    release_lock "$lock_dir"
 }
 
 # Roll-up: Update parent project with child's contributed total
@@ -830,11 +848,7 @@ update_parent_project() {
     [[ -z "$config" || ! -f "$config" ]] && return
 
     local lock_dir="${config}.lock"
-    if [[ -d "$lock_dir" ]]; then
-        local lock_age=$(( $(date +%s) - $(stat -f %m "$lock_dir" 2>/dev/null || echo 0) ))
-        [[ $lock_age -gt 60 ]] && rmdir "$lock_dir" 2>/dev/null
-    fi
-    mkdir "$lock_dir" 2>/dev/null || return
+    acquire_lock "$lock_dir" || return
 
     # Set sub-project total (absolute, self-healing)
     local updated=$(jq --arg total "$sub_total" --arg sid "$sid" --arg plan "$plan" --arg sub "$sub_name" '
@@ -849,7 +863,7 @@ update_parent_project() {
     ' "$config")
 
     echo "$updated" > "${config}.tmp" && mv "${config}.tmp" "$config"
-    rmdir "$lock_dir" 2>/dev/null
+    release_lock "$lock_dir"
 }
 
 # Only update on cycle 0 (every ~10s) and if tracking enabled
