@@ -157,11 +157,48 @@ Convert to:
 }
 ```
 
-## Open Questions
+## Answered Design Questions
 
-1. Should child projects track their own sessions separately, or just reference parent?
-2. How to handle sessions that start in child but parent doesn't exist yet?
-3. Multi-level nesting: Does grandparent track grandchild breakdown, or just immediate children?
+1. **Do child projects track their own sessions?**
+   YES - A child can have sessions that STARTED there. A child becomes a parent when it has subfolders with their own repos/configs.
+
+2. **What if session starts in child but parent doesn't exist?**
+   The chain ALWAYS goes up to `~/.claude/statusline-project.json` (master). Every project has a parent, ultimately rooted at ~/.claude.
+
+3. **Does grandparent track grandchild breakdown?**
+   NO - Each level only tracks IMMEDIATE children. Grandparent sees child's total (which already includes grandchild contributions rolled up).
+
+## Hierarchy Example
+
+```
+~/.claude/statusline-project.json                    (MASTER - root of all)
+├── sessions: { own sessions started at ~ level }
+├── projects: {
+│     "Gravicity Projects": { contributed: 75.00 }   // Just the total
+│   }
+
+~/Gravicity Projects/.claude/statusline-project.json  (umbrella)
+├── parent: ~/.claude/statusline-project.json
+├── sessions: {
+│     "a3013a": {
+│       breakdown: { _self: 5, "claude-statusline": 55, "verivox": 15 }
+│     }
+│   }
+├── projects: {
+│     "claude-statusline": { contributed: 55 },
+│     "verivox": { contributed: 15 }
+│   }
+
+~/Gravicity Projects/claude-statusline/.claude/       (leaf project)
+├── parent: ~/Gravicity Projects/.claude/statusline-project.json
+├── sessions: { sessions that STARTED here }
+├── costs: { from_parent: 55, own: X, total: 55+X }
+```
+
+**Roll-up flow:**
+1. claude-statusline reports total (from_parent + own) UP to Gravicity Projects
+2. Gravicity Projects reports its total UP to ~/.claude master
+3. Master sees all costs, but only immediate children breakdown
 
 ## Files to Modify
 
