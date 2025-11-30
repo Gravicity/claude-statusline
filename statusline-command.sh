@@ -1,17 +1,29 @@
 #!/bin/bash
-# Claude Code Statusline - Dynamic 4/5-line display
-# Displays: Model, context, memory, cost, project, git, stats, pulse animation
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║  Claude Code Statusline v2.0                                              ║
+# ║  A dynamic 4/5-line statusline with project cost tracking                 ║
+# ╠═══════════════════════════════════════════════════════════════════════════╣
+# ║  Features:                                                                ║
+# ║  • Model-specific themes (Opus/Sonnet/Haiku)                              ║
+# ║  • Hierarchical cost tracking (MASTER → Umbrella → Project)               ║
+# ║  • Session attribution with breakdown structure                           ║
+# ║  • Git integration with health-colored staleness                          ║
+# ║  • Animated pulse with truecolor/256-color support                        ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
 
 # ============================================
-# CLI COMMANDS (run before stdin)
+# CLI MODE
 # ============================================
+# Handles: --init-master, --init-umbrella, --init-project, --sync, --dedicate, --help
+# These run BEFORE reading stdin and exit immediately
 
+# --- CLI Output Colors ---
 RESET='\033[0m'
 BOLD='\033[1m'
 DIM='\033[2m'
 CYAN='\033[1;36m'
 
-# CLI colors - detect truecolor for pretty output, fallback to 256
+# Detect truecolor for CLI output (separate from statusline detection)
 if [[ "$COLORTERM" == "truecolor" || "$COLORTERM" == "24bit" ]]; then
     PURPLE='\033[1;38;2;139;92;246m'
     GREEN='\033[1;38;2;34;197;94m'
@@ -24,15 +36,18 @@ else
     SLATE='\033[1;38;5;248m'    # 256-color gray
 fi
 
+# --- CLI Output Helpers ---
 cli_print_success() { echo -e "  ${GREEN}✓${RESET} $1"; }
 cli_print_info() { echo -e "  ${CYAN}→${RESET} $1"; }
 cli_print_warn() { echo -e "  ${YELLOW}!${RESET} $1"; }
 cli_print_error() { echo -e "  ${PURPLE}✗${RESET} $1"; }
 
-# MASTER root config location
-MASTER_CONFIG="$HOME/.claude/statusline-project.json"
+# --- Hierarchy Constants ---
+MASTER_CONFIG="$HOME/.claude/statusline-project.json"  # Top of the tree
 
-# Find parent umbrella project (walks up to find parent, falls back to MASTER)
+# --- CLI Helper: Find Parent ---
+# Walks up directory tree (max 5 levels) to find nearest umbrella/parent project
+# Falls back to MASTER root if no closer parent found
 find_parent_umbrella() {
     local dir="$1"
     local parent_dir=$(dirname "$dir")
@@ -49,7 +64,9 @@ find_parent_umbrella() {
     [[ -f "$MASTER_CONFIG" ]] && echo "$MASTER_CONFIG"
 }
 
-# Initialize MASTER root at ~/.claude
+# --- CLI Command: --init-master ---
+# Creates the MASTER root at ~/.claude/statusline-project.json
+# All projects without a closer parent roll up here
 init_master() {
     local config="$MASTER_CONFIG"
 
@@ -83,7 +100,9 @@ EOF
     exit 0
 }
 
-# Initialize umbrella project
+# --- CLI Command: --init-umbrella ---
+# Creates an umbrella project (parent for multiple sub-projects)
+# Sub-projects auto-link to nearest umbrella when created
 init_umbrella() {
     local target="${1:-$PWD}"
     target=$(cd "$target" 2>/dev/null && pwd) || { cli_print_error "Directory not found: $1"; exit 1; }
@@ -116,7 +135,8 @@ EOF
     exit 0
 }
 
-# Initialize regular project
+# --- CLI Command: --init-project ---
+# Creates a regular project config with auto-detected git remote and parent
 init_project() {
     local target="${1:-$PWD}"
     target=$(cd "$target" 2>/dev/null && pwd) || { cli_print_error "Directory not found: $1"; exit 1; }
@@ -162,8 +182,9 @@ EOF
     exit 0
 }
 
-# Sync project costs with actual session data from state files
-# Phase 2: Sync project with breakdown structure support
+# --- CLI Command: --sync ---
+# Syncs project costs with actual session data from state files
+# Also migrates Phase 1 sessions (contributed) to Phase 2 (breakdown)
 sync_project() {
     local target="${1:-$PWD}"
     target=$(cd "$target" 2>/dev/null && pwd) || { cli_print_error "Directory not found: $1"; exit 1; }
@@ -310,9 +331,9 @@ sync_project() {
     exit 0
 }
 
-# Dedicate a session's full cost to a specific project
-# Phase 2: Dedicate session's _self breakdown to a child project
-# Moves breakdown._self amount to breakdown[child_name]
+# --- CLI Command: --dedicate ---
+# Moves a session's _self breakdown amount to a specified child project
+# Use when work done at umbrella level was actually for a specific sub-project
 dedicate_session() {
     local session_short="${1:-}"
     local target_project="${2:-$PWD}"
@@ -405,7 +426,7 @@ dedicate_session() {
     exit 0
 }
 
-# CLI help
+# --- CLI Command: --help ---
 show_cli_help() {
     echo ""
     echo -e "  ${BOLD}Claude Code Statusline${RESET} ${DIM}v2.0${RESET}"
@@ -430,7 +451,7 @@ show_cli_help() {
     exit 0
 }
 
-# Handle CLI arguments before reading stdin
+# --- CLI Argument Router ---
 case "${1:-}" in
     --init-master)   init_master ;;
     --init-umbrella) init_umbrella "${2:-}" ;;
@@ -440,18 +461,16 @@ case "${1:-}" in
     --help|-h)       show_cli_help ;;
 esac
 
-# ============================================
-# STATUSLINE MODE (stdin JSON input)
-# ============================================
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║  STATUSLINE MODE - Receives JSON from Claude Code via stdin               ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
 
 input=$(cat)
 
-# Debug: dump raw JSON (set STATUSLINE_DEBUG=1)
+# Debug mode: dump raw JSON (set STATUSLINE_DEBUG=1 to enable)
 [[ "${STATUSLINE_DEBUG:-0}" == "1" ]] && mkdir -p "$HOME/.cache/claude-statusline" && echo "$input" > "$HOME/.cache/claude-statusline/debug-input.json"
 
-# ============================================
-# PARSE INPUT (from stdin JSON)
-# ============================================
+# --- Parse Input JSON ---
 model_name=$(echo "$input" | jq -r '.model.display_name')
 cwd=$(echo "$input" | jq -r '.cwd // .workspace.current_dir')
 session_id=$(echo "$input" | jq -r '.session_id')
@@ -462,16 +481,15 @@ lines_added=$(echo "$input" | jq -r '.cost.total_lines_added // 0')
 lines_removed=$(echo "$input" | jq -r '.cost.total_lines_removed // 0')
 token_warning=$(echo "$input" | jq -r '.exceeds_200k_tokens // false')
 
-# Cache directory
+# --- Cache Directory ---
 CACHE_DIR="$HOME/.cache/claude-statusline"
 mkdir -p "$CACHE_DIR"
 
-# ============================================
-# CONFIGURATION
-# ============================================
+# --- Configuration ---
+# All settings are optional; defaults used if config file absent
 CONFIG_FILE="$HOME/.claude/statusline-config.json"
 
-# Defaults
+# Default values
 TRACKING_ENABLED=true
 AUTO_CREATE_MODE="claude_folder"  # never, git_only, claude_folder, git_and_claude, always
 AUTO_CREATE_UMBRELLA=false
@@ -525,12 +543,11 @@ if [[ -f "$CONFIG_FILE" ]]; then
     STALENESS_CRIT=$(jq -r '.thresholds.staleness_crit // 500' "$CONFIG_FILE")
 fi
 
-# Plan from environment or config
+# Plan: env var takes precedence over config
 CLAUDE_PLAN="${CLAUDE_PLAN:-$(jq -r '.plan // "api"' "$CONFIG_FILE" 2>/dev/null || echo "api")}"
 
-# ============================================
-# COLORS (with truecolor detection)
-# ============================================
+# --- Colors & Truecolor Detection ---
+# Truecolor (24-bit RGB) vs 256-color palette fallback for Terminal.app
 RESET='\033[0m'
 DIM='\033[2m'
 B_CYAN='\033[1;36m'
@@ -564,7 +581,8 @@ else
     HEALTH_CRIT='\033[1;38;5;196m'  # Red (critical)
 fi
 
-# Health color helper (reverse=1: higher is worse)
+# Get health color based on value and thresholds
+# reverse=1 means higher values are worse (e.g., context %)
 get_health_color() {
     local val="$1" warn="$2" crit="$3" reverse="${4:-0}"
     if [[ $reverse -eq 1 ]]; then
@@ -601,9 +619,8 @@ get_health_rgb() {
     fi
 }
 
-# ============================================
-# MODEL THEME (ANSI-256 + RGB)
-# ============================================
+# --- Model Theme ---
+# Each model gets its own color personality (256-color safe + RGB for pulse)
 case "$model_name" in
     *Sonnet*)
         THEME_PRIMARY='\033[1;38;5;208m'  # Orange
@@ -627,9 +644,8 @@ case "$model_name" in
         ;;
 esac
 
-# ============================================
-# PROJECT DETECTION & AUTO-INIT
-# ============================================
+# --- Project Detection ---
+# Walks up to find .claude/statusline-project.json (max 5 levels)
 detect_project() {
     local dir="$1" depth=0
     while [[ "$dir" != "/" && $depth -lt 5 ]]; do
@@ -639,7 +655,9 @@ detect_project() {
     done
 }
 
-# Auto-create project config based on auto_create_mode
+# --- Auto-Create Project ---
+# Creates project config based on auto_create_mode setting
+# Modes: never, git_only, claude_folder (default), git_and_claude, always
 auto_create_project() {
     [[ "$TRACKING_ENABLED" != "true" ]] && return
     [[ "$AUTO_CREATE_MODE" == "never" ]] && return
@@ -718,11 +736,10 @@ else
     project_icon="🏠"
 fi
 
-# ============================================
-# DELTA COST TRACKING (Phase 2: Session Attribution)
-# ============================================
-# Session lives WHERE IT STARTED (session_home), with breakdown tracking
-# Format: {cost}|{session_home_config}
+# --- Delta Cost Tracking (Session Attribution) ---
+# Session belongs to project where it STARTED (session_home)
+# Breakdown tracks where work was done: { "_self": X, "child-name": Y }
+# State file format: {cost}|{session_home_config}
 
 state_file="$CACHE_DIR/session-${session_id}.state"
 project_total_cost=0
@@ -745,14 +762,15 @@ if [[ -z "$session_home" ]]; then
     session_home="$project_config"
 fi
 
-# Determine breakdown key: _self if in session_home, else child project name
+# Breakdown key: "_self" if in session_home, else the child project's name
 breakdown_key="_self"
 if [[ -n "$project_config" && "$project_config" != "$session_home" ]]; then
     # We're in a different project than where session started
     breakdown_key=$(jq -r '.name // "unknown"' "$project_config" 2>/dev/null)
 fi
 
-# Update project costs (Phase 2: uses breakdown structure)
+# Update session cost in project config using breakdown structure
+# Uses atomic file locking with 60s stale lock cleanup
 update_project_cost() {
     local config="$1" amount="$2" sid="$3" plan="$4" breakdown_key="${5:-_self}" transcript="${6:-}"
     [[ -z "$config" || ! -f "$config" ]] && return
@@ -806,7 +824,7 @@ update_project_cost() {
     rmdir "$lock_dir" 2>/dev/null
 }
 
-# Update parent project with child's total (for roll-up)
+# Roll-up: Update parent project with child's contributed total
 update_parent_project() {
     local config="$1" sub_name="$2" sub_total="$3" sid="$4" plan="$5"
     [[ -z "$config" || ! -f "$config" ]] && return
@@ -866,9 +884,8 @@ elif [[ -n "$project_config" && -f "$project_config" ]]; then
     project_total_cost=$(jq -r '.costs.total // 0' "$project_config" 2>/dev/null || echo "0")
 fi
 
-# ============================================
-# MEMORY FILES COUNT
-# ============================================
+# --- Memory Files ---
+# Counts CLAUDE.md files in cwd hierarchy (max 3 levels up) + global
 count_memory_files() {
     local count=0 dir="$cwd" depth=0
     while [[ "$dir" != "/" && $depth -lt 3 ]]; do
@@ -882,9 +899,9 @@ count_memory_files() {
 }
 memory_count=$(count_memory_files)
 
-# ============================================
-# TRANSCRIPT PARSING (cached - only for context%, cache%, msg_count)
-# ============================================
+# --- Transcript Parsing (Cached) ---
+# Extracts: context %, cache %, message count
+# Cached by MD5 hash of transcript path
 if [[ -f "$transcript_path" ]]; then
     cache_file="$CACHE_DIR/transcript-$(echo "$transcript_path" | md5).cache"
     transcript_mtime=$(stat -f %m "$transcript_path" 2>/dev/null || echo 0)
@@ -910,9 +927,10 @@ else
     conversation_tokens=0 cache_pct=0 total_input=0 baseline_overhead=0 true_total=0 msg_count=0
 fi
 
-# ============================================
-# PATH DISPLAY
-# ============================================
+# --- Path Display ---
+# Three styles: forward truncation, project+depth, reverse truncation
+# Cycles every ~3 seconds when path_cycling enabled
+
 truncate_name() {
     local name="$1" max="${2:-15}"
     [[ "$name" == *" "* ]] && name="${name%% *}…"
@@ -983,9 +1001,9 @@ else
     [[ "$display_dir" == "~" || -z "$display_dir" ]] && display_dir="Home"
 fi
 
-# ============================================
-# GIT INFO (cached)
-# ============================================
+# --- Git Info (Cached) ---
+# Branch, ahead/behind, status; cached 5s
+# Git URL cached 60s for clickable links
 git_info="" git_url=""
 if git -C "$cwd" rev-parse --git-dir > /dev/null 2>&1; then
     cache_file="$CACHE_DIR/git-$(echo "$cwd" | md5)-${session_id:0:8}.cache"
@@ -1024,9 +1042,7 @@ if git -C "$cwd" rev-parse --git-dir > /dev/null 2>&1; then
     fi
 fi
 
-# ============================================
-# FORMAT VALUES
-# ============================================
+# --- Format Values ---
 duration_info=""
 if [[ "$total_duration" != "0" && "$total_duration" != "null" ]]; then
     secs=$((total_duration / 1000))
@@ -1063,12 +1079,19 @@ fi
 session_short="${session_id: -6}"
 IDE_SCHEME="${CLAUDE_IDE_SCHEME:-file://}"
 
-# ============================================
-# BUILD OUTPUT
-# ============================================
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║  BUILD OUTPUT - Assembles the 4/5 line statusline                         ║
+# ╠═══════════════════════════════════════════════════════════════════════════╣
+# ║  Line 1: Model─Version─🧠─Context%─📚─Memory─💰Cost                        ║
+# ║  Line 2: Icon + Project/Path                                              ║
+# ║  Line 3: Git info (branch, ahead/behind, staged, modified, diff, age)     ║
+# ║  Line 4: ⏱Duration 💬Messages +Code-Removed ※SessionID                    ║
+# ║  Line 5: Animated pulse + 🛡Cache%                                         ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+
 SEP="${THEME_PRIMARY}─${RESET}"
 
-# Line 1: Model─Context─Memory─Cost
+# --- Line 1: Model─Context─Memory─Cost ---
 model_display="${model_name// /${SEP}${THEME_ACCENT}}"
 line1="${THEME_PRIMARY}╭─${RESET}${THEME_ACCENT}${model_display}${RESET}"
 [[ $total_with_buffer -gt 0 ]] && line1+="${SEP}🧠${SEP}${context_color}${context_pct}%${RESET}"
@@ -1096,11 +1119,11 @@ if [[ "$total_cost" != "0" && "$total_cost" != "null" ]]; then
     fi
 fi
 
-# Line 2: Project/Path
+# --- Line 2: Project/Path ---
 line2="${THEME_PRIMARY}│${RESET} "
 [[ -n "$project_icon" ]] && line2+="${project_icon}${B_CYAN}${display_dir}${RESET}" || line2+="📦 ${B_CYAN}${display_dir}${RESET}"
 
-# Line 3 (conditional): Git info
+# --- Line 3: Git Info (only shown in git repos) ---
 line_git=""
 if [[ -n "$git_info" ]]; then
     line_git="${THEME_PRIMARY}│${RESET} "
@@ -1204,7 +1227,7 @@ EOF
     fi
 fi
 
-# Line 4: Duration─Messages─Code─Session
+# --- Line 4: Duration─Messages─Code─Session ---
 line_stats="${THEME_PRIMARY}│${RESET} "
 [[ -n "$duration_info" ]] && line_stats+="⏱ ${THEME_ACCENT}${duration_info}${RESET}"
 [[ $msg_count -gt 0 ]] && line_stats+=" 💬${B_CYAN}$(format_num $msg_count)${RESET}"
@@ -1216,7 +1239,9 @@ else
     line_stats+=" ${THEME_ACCENT}※${session_short}${RESET}"
 fi
 
-# Line 5: Pulse animation with cache shield
+# --- Line 5: Pulse Animation + Cache Shield ---
+# Truecolor: smooth RGB gradient from theme → health color
+# 256-color fallback: simple moving orb without gradient
 get_health_rgb $context_pct
 
 # Choose color mode for pulse (256-color fallback for Terminal.app)
@@ -1319,7 +1344,7 @@ fi
 line_pulse="${THEME_PRIMARY}╰${RESET}${PULSE_THEME}─${RESET}${pulse}"
 [[ $cache_pct -gt 0 ]] && line_pulse+=" ${context_color}🛡 ${cache_pct}%${RESET}" || line_pulse+=" ${MUTED_SLATE}🛡 ─${RESET}"
 
-# Output (ensure clean terminal state with final RESET)
+# --- Final Output ---
 echo -e "$line1"
 echo -e "$line2"
 [[ -n "$line_git" ]] && echo -e "$line_git"
