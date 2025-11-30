@@ -205,3 +205,94 @@ Convert to:
 - `statusline-command.sh`: Main tracking logic
 - `docs/CONFIGURATION.md`: Document new structure
 - Existing project configs: Migration needed
+
+## Implementation Notes (Context Preservation)
+
+### File Locations
+- **Main script**: `/Users/user/Gravicity Projects/claude-statusline/statusline-command.sh`
+- **Installed script**: `~/.claude/statusline-command.sh` (copy after testing)
+- **Umbrella config**: `/Users/user/Gravicity Projects/.claude/statusline-project.json`
+- **Sub-project config**: `/Users/user/Gravicity Projects/claude-statusline/.claude/statusline-project.json`
+- **State files**: `~/.cache/claude-statusline/session-{id}.state`
+- **State file format**: `{cost}|{project_config_path}`
+
+### Key Functions in statusline-command.sh
+- `update_project_cost()` ~line 510 - handles both umbrella (is_umbrella=true) and regular updates
+- `dedicate_session()` ~line 224 - current implementation (needs Phase 2 update)
+- `sync_project()` ~line 117 - reads from state files to reconcile
+- `init_project()` / `init_umbrella()` - project setup commands
+- Delta tracking logic ~line 498-508 - calculates cost_delta from state file
+
+### Current Data Structure (Pre-Phase 2)
+```json
+// Umbrella session (after dedication - THIS IS WHAT WE'RE FIXING)
+"sessions": {
+  "a3013a": {
+    "contributed": 0,           // <-- misleading, needs to become breakdown
+    "dedicated_to": "claude-statusline",
+    "transcript": "..."
+  }
+}
+
+// Sub-project session
+"sessions": {
+  "a3013a": {
+    "contributed": 63.60,
+    "dedicated": true,
+    "transcript": "..."
+  }
+}
+```
+
+### Timing Mechanism
+- `display_cycle=$(( $(date +%S) % 10 ))` - cycles 0-9 based on current second
+- Project updates only happen on cycle 0 (~every 10 seconds)
+- State file should ONLY update after successful project update (bug we fixed)
+
+### Lock Mechanism
+- Uses `mkdir "$lock_dir"` for atomic locking (returns 1 if exists)
+- Stale lock cleanup: removes locks older than 60 seconds
+- Lock dir: `${config}.lock`
+
+### Child Project Detection (NEEDED FOR PHASE 2)
+Currently we detect child by checking if `project_config` has a `parent` field.
+For breakdown tracking, we need to detect if cwd is IN a child:
+```bash
+# Pseudocode for detecting child project
+current_project_config = find_project_config(cwd)
+session_home_config = ... # where session started
+if current_project_config != session_home_config:
+    # We're in a child (or different project)
+    child_name = jq '.name' current_project_config
+    # Update breakdown[child_name] instead of breakdown._self
+```
+
+### Roll-up Logic (NEEDED FOR PHASE 2)
+After updating a project, also update its parent:
+```bash
+parent_config=$(jq -r '.parent // empty' "$project_config")
+if [[ -n "$parent_config" && -f "$parent_config" ]]; then
+    my_total=$(jq -r '.costs.total' "$project_config")
+    my_name=$(jq -r '.name' "$project_config")
+    # Update parent's projects[my_name].contributed = my_total
+fi
+```
+
+### Session Start Detection
+To get session start time, use transcript file creation time:
+```bash
+transcript_ctime=$(stat -f %B "$transcript_path" 2>/dev/null)  # macOS
+# Convert to ISO date for JSON
+```
+
+### Test Data Reference
+- Current session: `3f542803-742f-485d-a220-32fd83a3013a` (short: a3013a)
+- Session cost: ~$65+ (check state file for current)
+- Already dedicated to claude-statusline
+
+### Migration Strategy
+1. Read existing `contributed` value
+2. If `dedicated_to` exists: put full amount in `breakdown[dedicated_to]`, `_self: 0`
+3. If no dedication: put full amount in `breakdown._self`
+4. Add `total_cost` from state file or transcript
+5. Add `started` from transcript ctime
