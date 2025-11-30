@@ -423,7 +423,11 @@ update_project_cost() {
         local updated=$(jq --arg delta "$delta" --arg sid "$sid" --arg plan "$plan" '
             .costs.sessions[$sid].contributed = ((.costs.sessions[$sid].contributed // 0) + ($delta | tonumber)) |
             .costs.sessions[$sid].updated = (now | todate) |
-            .costs.total = ([.costs.sessions // {} | to_entries[].value.contributed // 0] | add // 0) |
+            # Total = sessions + projects (for umbrellas with direct work)
+            .costs.total = (
+                ([.costs.sessions // {} | to_entries[].value.contributed // 0] | add // 0) +
+                ([.costs.projects // {} | to_entries[].value.contributed // 0] | add // 0)
+            ) |
             .costs.session_count = ([.costs.sessions // {} | keys[]] | length) |
             .costs.last_updated = (now | todate) |
             .costs.plan = $plan |
