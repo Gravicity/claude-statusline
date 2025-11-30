@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "plan": "api",
+  "tracking": {
+    "enabled": true,
+    "git_repos_only": true,
+    "auto_create_umbrella": false
+  },
+  "display": {
+    "pulse_animation": true,
+    "cost_cycling": true
+  },
+  "health_colors": {
+    "good": [34, 197, 94],
+    "warn": [234, 179, 8],
+    "crit": [239, 68, 68]
+  },
+  "thresholds": {
+    "context_warn": 50,
+    "context_crit": 75,
+    "memory_warn": 4,
+    "memory_crit": 8,
+    "staleness_warn": 100,
+    "staleness_crit": 500
+  }
+}
