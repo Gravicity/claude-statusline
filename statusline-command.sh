@@ -252,6 +252,18 @@ get_health_color() {
     echo "$HEALTH_GOOD"
 }
 
+# Format large numbers (1234 → 1.2K)
+format_num() {
+    local n="$1"
+    if [[ $n -ge 1000000 ]]; then
+        printf "%.1fM" "$(echo "scale=1; $n / 1000000" | bc)"
+    elif [[ $n -ge 1000 ]]; then
+        printf "%.1fK" "$(echo "scale=1; $n / 1000" | bc)"
+    else
+        echo "$n"
+    fi
+}
+
 # Set health RGB for pulse gradient
 get_health_rgb() {
     local pct="$1"
@@ -582,7 +594,7 @@ if [[ "$total_cost" != "0" && "$total_cost" != "null" && "$total_duration" != "0
 fi
 
 code_added="" code_removed=""
-[[ "$lines_added" != "0" || "$lines_removed" != "0" ]] && code_added="+${lines_added}" && code_removed="-${lines_removed}"
+[[ "$lines_added" != "0" || "$lines_removed" != "0" ]] && code_added="+$(format_num $lines_added)" && code_removed="-$(format_num $lines_removed)"
 
 BUFFER_SIZE=45000
 total_with_buffer=$true_total
@@ -741,7 +753,7 @@ fi
 # Line 4: Duration─Messages─Code─Session
 line_stats="${THEME_PRIMARY}│${RESET} "
 [[ -n "$duration_info" ]] && line_stats+="⧗ ${THEME_ACCENT}${duration_info}${RESET}"
-[[ $msg_count -gt 0 ]] && line_stats+=" 💬 ${B_CYAN}${msg_count}${RESET}"
+[[ $msg_count -gt 0 ]] && line_stats+=" 💬 ${B_CYAN}$(format_num $msg_count)${RESET}"
 [[ -n "$code_added" ]] && line_stats+=" ${THEME_ACCENT}${code_added}${RESET}${B_RED}${code_removed}${RESET}"
 
 if [[ -f "$transcript_path" ]]; then
