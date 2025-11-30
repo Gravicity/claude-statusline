@@ -904,6 +904,22 @@ if [[ "$TRACKING_ENABLED" == "true" && -n "$session_home" && $display_cycle -eq 
     # Save state AFTER successful update - preserve session_home (set once)
     echo "${total_cost}|${session_home}" > "$state_file"
 
+    # Backfill git URL if null (one-time per project)
+    if [[ -n "$project_config" && -f "$project_config" ]]; then
+        local current_git=$(jq -r '.git // empty' "$project_config" 2>/dev/null)
+        if [[ -z "$current_git" || "$current_git" == "null" ]]; then
+            local detected_git=$(git -C "$cwd" remote get-url origin 2>/dev/null | sed 's|git@\([^:]*\):|https://\1/|;s|\.git$||')
+            if [[ -n "$detected_git" ]]; then
+                local lock_dir="${project_config}.lock"
+                if acquire_lock "$lock_dir"; then
+                    jq --arg git "$detected_git" '.git = $git' "$project_config" > "${project_config}.tmp" && \
+                        mv "${project_config}.tmp" "$project_config"
+                    release_lock "$lock_dir"
+                fi
+            fi
+        fi
+    fi
+
     # Get display total from session home
     project_total_cost=$(jq -r '.costs.total // 0' "$session_home" 2>/dev/null || echo "0")
 elif [[ -n "$session_home" && -f "$session_home" ]]; then
