@@ -162,6 +162,35 @@ For parent projects that aggregate costs from sub-projects:
 
 **Note:** Umbrella projects are regular project configs with `parent: null`. Sub-projects link to them via the `parent` field. Costs roll up automatically via delta tracking.
 
+## CLI Commands
+
+The statusline script includes several CLI commands for managing projects:
+
+```bash
+# Create umbrella project (parent for multiple sub-projects)
+~/.claude/statusline-command.sh --init-umbrella ~/projects
+
+# Create regular project (auto-links to parent umbrella if found)
+~/.claude/statusline-command.sh --init-project
+~/.claude/statusline-command.sh --init-project ~/projects/my-app
+
+# Sync project costs with actual session data
+# Reconciles tracking discrepancies from session state files
+~/.claude/statusline-command.sh --sync
+
+# Show help
+~/.claude/statusline-command.sh --help
+```
+
+### When to Use `--sync`
+
+Use the sync command when:
+- You created a project config mid-session (missed earlier costs)
+- Cost tracking seems out of sync with statusline display
+- After recovering from tracking bugs or data migration
+
+**Note:** Sync reads from session state files in `~/.cache/claude-statusline/`. Sessions without state files (older/inactive sessions) cannot be synced and will be skipped.
+
 ## Environment Variables
 
 | Variable | Description |

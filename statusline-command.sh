@@ -114,6 +114,113 @@ EOF
     exit 0
 }
 
+# Sync project costs with actual session data from state files
+sync_project() {
+    local target="${1:-$PWD}"
+    target=$(cd "$target" 2>/dev/null && pwd) || { cli_print_error "Directory not found: $1"; exit 1; }
+
+    local config="$target/.claude/statusline-project.json"
+    [[ ! -f "$config" ]] && { cli_print_error "No project config found: $config"; exit 1; }
+
+    local cache_dir="$HOME/.cache/claude-statusline"
+    local parent=$(jq -r '.parent // empty' "$config" 2>/dev/null)
+    local project_name=$(jq -r '.name // "unknown"' "$config" 2>/dev/null)
+
+    # If sub-project, sync to umbrella instead
+    if [[ -n "$parent" && -f "$parent" ]]; then
+        cli_print_info "Sub-project detected: ${CYAN}$project_name${RESET}"
+        cli_print_info "Syncing umbrella: ${CYAN}$parent${RESET}"
+        config="$parent"
+        project_name=$(jq -r '.name // "unknown"' "$config" 2>/dev/null)
+    fi
+
+    echo -e "\n  ${BOLD}Syncing: $project_name${RESET}\n"
+
+    # Read all sessions from config
+    local sessions=$(jq -r '.costs.sessions // {} | keys[]' "$config" 2>/dev/null)
+    [[ -z "$sessions" ]] && { cli_print_warn "No sessions found in project config"; exit 0; }
+
+    local updated=0
+    local total_diff=0
+    local updated_config=$(cat "$config")
+
+    while IFS= read -r session_id; do
+        [[ -z "$session_id" ]] && continue
+
+        # Look for state file in cache
+        local state_file="$cache_dir/session-${session_id}.state"
+        local actual_cost=""
+
+        if [[ -f "$state_file" ]]; then
+            # State file format: cost|project_config_path
+            actual_cost=$(cut -d'|' -f1 < "$state_file" 2>/dev/null)
+        fi
+
+        if [[ -z "$actual_cost" || "$actual_cost" == "0" ]]; then
+            printf "  ${YELLOW}!${RESET} Session ${DIM}${session_id:0:8}${RESET}: no state file found, skipping\n"
+            continue
+        fi
+
+        # Get current recorded cost
+        local recorded=$(echo "$updated_config" | jq -r ".costs.sessions[\"$session_id\"].contributed // 0")
+        [[ "$recorded" == "null" ]] && recorded=0
+
+        # Calculate difference
+        local diff=$(echo "$actual_cost - $recorded" | bc -l 2>/dev/null || echo "0")
+
+        # Check if significant difference (> $0.01)
+        if (( $(echo "${diff#-} > 0.01" | bc -l 2>/dev/null || echo 0) )); then
+            printf "  ${CYAN}→${RESET} Session ${DIM}${session_id:0:8}${RESET}: "
+            printf "${YELLOW}\$%.2f${RESET} → ${GREEN}\$%.2f${RESET} " "$recorded" "$actual_cost"
+            if (( $(echo "$diff > 0" | bc -l) )); then
+                printf "${GREEN}(+\$%.2f)${RESET}\n" "$diff"
+            else
+                printf "${YELLOW}(\$%.2f)${RESET}\n" "$diff"
+            fi
+
+            # Update the config in memory
+            updated_config=$(echo "$updated_config" | jq --arg sid "$session_id" --argjson cost "$actual_cost" \
+                '.costs.sessions[$sid].contributed = $cost')
+
+            ((updated++))
+            total_diff=$(echo "$total_diff + $diff" | bc -l 2>/dev/null || echo "$total_diff")
+        else
+            printf "  ${GREEN}✓${RESET} Session ${DIM}${session_id:0:8}${RESET}: \$%.2f ${DIM}(in sync)${RESET}\n" "$recorded"
+        fi
+    done <<< "$sessions"
+
+    echo ""
+
+    if [[ $updated -gt 0 ]]; then
+        # Recalculate total (sum sessions + projects contributions)
+        updated_config=$(echo "$updated_config" | jq '
+            .costs.total = (
+                ([.costs.sessions // {} | to_entries[].value.contributed // 0] | add // 0) +
+                ([.costs.projects // {} | to_entries[].value.contributed // 0] | add // 0)
+            ) |
+            .costs.last_updated = (now | todate)
+        ')
+
+        local new_total=$(echo "$updated_config" | jq -r '.costs.total // 0')
+
+        # Write updated config
+        echo "$updated_config" > "$config"
+
+        printf "  ${GREEN}✓${RESET} Synced ${BOLD}%d${RESET} sessions, " "$updated"
+        if (( $(echo "$total_diff > 0" | bc -l) )); then
+            printf "added ${GREEN}\$%.2f${RESET}\n" "$total_diff"
+        else
+            printf "adjusted ${YELLOW}\$%.2f${RESET}\n" "$total_diff"
+        fi
+        printf "  ${GREEN}✓${RESET} New total: ${BOLD}\$%.2f${RESET}\n\n" "$new_total"
+    else
+        cli_print_success "All sessions already in sync"
+        echo ""
+    fi
+
+    exit 0
+}
+
 # CLI help
 show_cli_help() {
     echo ""
@@ -123,12 +230,14 @@ show_cli_help() {
     echo -e "    ${SLATE}(stdin)${RESET}           Normal statusline mode (receives JSON from Claude Code)"
     echo -e "    ${SLATE}--init-project${RESET}    Create project config in current or specified directory"
     echo -e "    ${SLATE}--init-umbrella${RESET}   Create umbrella/parent project config"
+    echo -e "    ${SLATE}--sync${RESET}            Sync project costs with actual transcript data"
     echo -e "    ${SLATE}--help${RESET}            Show this help"
     echo ""
     echo -e "  ${DIM}Examples:${RESET}"
     echo -e "    ${CYAN}~/.claude/statusline-command.sh --init-umbrella ~/projects${RESET}"
     echo -e "    ${CYAN}~/.claude/statusline-command.sh --init-project${RESET}"
-    echo -e "    ${CYAN}cd ~/projects/my-app && ~/.claude/statusline-command.sh --init-project${RESET}"
+    echo -e "    ${CYAN}~/.claude/statusline-command.sh --sync${RESET}"
+    echo -e "    ${CYAN}cd ~/projects/my-app && ~/.claude/statusline-command.sh --sync${RESET}"
     echo ""
     exit 0
 }
@@ -137,6 +246,7 @@ show_cli_help() {
 case "${1:-}" in
     --init-umbrella) init_umbrella "${2:-}" ;;
     --init-project)  init_project "${2:-}" ;;
+    --sync)          sync_project "${2:-}" ;;
     --help|-h)       show_cli_help ;;
 esac
 
