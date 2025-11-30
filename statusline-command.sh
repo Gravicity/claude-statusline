@@ -507,9 +507,6 @@ if [[ -f "$state_file" ]]; then
     fi
 fi
 
-# Save current state
-echo "${total_cost}|${project_config}" > "$state_file"
-
 # Update project costs with delta
 update_project_cost() {
     local config="$1" delta="$2" sid="$3" plan="$4" is_umbrella="${5:-false}" sub_name="${6:-}"
@@ -560,6 +557,9 @@ if [[ "$TRACKING_ENABLED" == "true" && -n "$project_config" && $display_cycle -e
         sub_project_name=$(jq -r '.name // "unknown"' "$project_config" 2>/dev/null)
         update_project_cost "$parent_config" "$cost_delta" "$session_id" "$CLAUDE_PLAN" "true" "$sub_project_name"
     fi
+
+    # Save state AFTER successful update (prevents delta loss)
+    echo "${total_cost}|${project_config}" > "$state_file"
 
     project_total_cost=$(jq -r '.costs.total // 0' "$project_config" 2>/dev/null || echo "0")
 elif [[ -n "$project_config" && -f "$project_config" ]]; then
@@ -646,7 +646,9 @@ truncate_reverse() {
 
 if [[ -n "$project_name" && -n "$project_root" ]]; then
     if [[ "$cwd" == "$project_root" ]]; then
-        display_dir=$(truncate_name "$project_name" $PATH_MAX)
+        # At project root - show full name, only truncate if really long
+        display_dir="$project_name"
+        [[ ${#display_dir} -gt $PATH_MAX ]] && display_dir="${display_dir:0:$((PATH_MAX-1))}…"
     elif [[ "$cwd" == "$project_root"/* ]]; then
         short_project=$(truncate_name "$project_name" 10)
         rel_path="${cwd#$project_root/}"
