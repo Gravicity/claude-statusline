@@ -113,14 +113,17 @@ Create `.claude/statusline-project.json` in any project:
 
 ```json
 {
-  "name": "My Project",
+  "name": "my-app",
   "icon": "🚀",
   "color": "#6366F1",
+  "git": "https://github.com/user/my-app",
   "parent": "/path/to/umbrella/.claude/statusline-project.json"
 }
 ```
 
 Configs are auto-created in git repos if `git_repos_only` is enabled.
+
+For umbrella projects that aggregate sub-project costs, see [example-umbrella.json](example-umbrella.json).
 
 ## Updating
 

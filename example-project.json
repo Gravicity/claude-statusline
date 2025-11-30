@@ -1,7 +1,20 @@
 {
-  "name": "My Project",
+  "name": "my-app",
   "icon": "🚀",
   "color": "#6366F1",
-  "git": null,
-  "parent": null
+  "git": "https://github.com/user/my-app",
+  "parent": "/Users/user/projects/.claude/statusline-project.json",
+  "costs": {
+    "total": 12.45,
+    "sessions": {
+      "abc123": {
+        "contributed": 8.20,
+        "plan": "api"
+      },
+      "def456": {
+        "contributed": 4.25,
+        "plan": "api"
+      }
+    }
+  }
 }

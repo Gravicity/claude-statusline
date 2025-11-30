@@ -1,0 +1,24 @@
+{
+  "name": "Gravicity Projects",
+  "icon": "🌌",
+  "color": null,
+  "git": null,
+  "parent": null,
+  "costs": {
+    "total": 87.50,
+    "projects": {
+      "my-app": {
+        "contributed": 12.45,
+        "sessions": ["abc123", "def456"]
+      },
+      "api-server": {
+        "contributed": 45.30,
+        "sessions": ["ghi789", "jkl012"]
+      },
+      "dashboard": {
+        "contributed": 29.75,
+        "sessions": ["mno345"]
+      }
+    }
+  }
+}

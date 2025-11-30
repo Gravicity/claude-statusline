@@ -95,11 +95,18 @@ Per-project settings in `.claude/statusline-project.json`:
 
 ```json
 {
-  "name": "My Project",
+  "name": "my-app",
   "icon": "🚀",
   "color": "#6366F1",
-  "git": "https://github.com/user/repo",
-  "parent": "/path/to/umbrella/.claude/statusline-project.json"
+  "git": "https://github.com/user/my-app",
+  "parent": "/Users/user/projects/.claude/statusline-project.json",
+  "costs": {
+    "total": 12.45,
+    "sessions": {
+      "abc123": { "contributed": 8.20, "plan": "api" },
+      "def456": { "contributed": 4.25, "plan": "api" }
+    }
+  }
 }
 ```
 
@@ -110,6 +117,43 @@ Per-project settings in `.claude/statusline-project.json`:
 | `color` | Custom accent color (hex, currently unused) |
 | `git` | Git remote URL (auto-detected) |
 | `parent` | Path to parent/umbrella project config |
+| `costs` | Auto-managed cost tracking (don't edit manually) |
+
+## Umbrella Project Config
+
+For parent projects that aggregate costs from sub-projects:
+
+```json
+{
+  "name": "Gravicity Projects",
+  "icon": "🌌",
+  "color": null,
+  "git": null,
+  "parent": null,
+  "costs": {
+    "total": 87.50,
+    "projects": {
+      "my-app": {
+        "contributed": 12.45,
+        "sessions": ["abc123", "def456"]
+      },
+      "api-server": {
+        "contributed": 45.30,
+        "sessions": ["ghi789", "jkl012"]
+      }
+    }
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `costs.total` | Sum of all sub-project contributions |
+| `costs.projects` | Per-sub-project breakdown |
+| `costs.projects[name].contributed` | Total cost from that sub-project |
+| `costs.projects[name].sessions` | Session IDs that contributed |
+
+**Note:** Umbrella projects are regular project configs with `parent: null`. Sub-projects link to them via the `parent` field. Costs roll up automatically via delta tracking.
 
 ## Environment Variables
 
