@@ -67,7 +67,7 @@ Can also be set via environment variable: `export CLAUDE_PLAN="max5x"`
 | `"git_and_claude"` | Create only when both `.git/` AND `.claude/` exist |
 | `"always"` | Create in any directory |
 
-**Recommended:** `claude_folder` (default) - Projects are naturally "born" when you start Claude in a new folder, since Claude creates `.claude/` on init or permission acceptance. This follows Claude's own "this is a Claude project" signal.
+**Recommended:** `claude_folder` (default) - Projects are created when `.claude/` exists. Claude creates this folder on `claude init` or when you select "don't ask again" for permissions. Users relying on global settings across folders may prefer `git_only` or `git_and_claude`.
 
 
 ### `display`

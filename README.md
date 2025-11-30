@@ -142,7 +142,7 @@ Config file: `~/.claude/statusline-config.json` (optional - sensible defaults us
 | `always` | Any directory |
 | `never` | Manual `--init` only |
 
-**Natural project birth:** With `claude_folder` mode (default), projects are automatically "born" into the statusline tree when you start Claude in a new folder. Claude creates `.claude/` on init or permission acceptance—this signals intent and triggers auto-creation.
+**When projects are created:** With `claude_folder` mode (default), statusline projects are created when a `.claude/` folder exists. Claude creates this folder when you run `claude init` or select "don't ask again" for permissions—signaling project-specific intent.
 
 See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for all options.
 

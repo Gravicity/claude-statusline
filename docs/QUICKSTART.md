@@ -82,7 +82,7 @@ Create `~/.claude/statusline-config.json`:
 | `git_and_claude` | Both `.git/` AND `.claude/` exist |
 | `never` | Only via manual `--init` |
 
-**Natural project birth:** With `claude_folder` mode (default), projects are automatically "born" into the statusline tree when you start Claude in a new folder. Claude creates `.claude/` when you run `claude`, use `claude init`, or accept permissions—this signals intent and triggers auto-creation of the statusline project config.
+**When projects are created:** With `claude_folder` mode (default), statusline projects are created when a `.claude/` folder exists. Claude creates this folder when you run `claude init` or select "don't ask again" for permissions—signaling project-specific intent. Users with global settings may prefer `git_only` or `git_and_claude` modes.
 
 ### 5. Create MASTER Root (Optional but Recommended)
 
