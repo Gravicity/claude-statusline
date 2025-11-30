@@ -514,6 +514,11 @@ update_project_cost() {
     [[ "$amount" == "0" || -z "$amount" ]] && return
 
     local lock_dir="${config}.lock"
+    # Remove stale locks (older than 60 seconds)
+    if [[ -d "$lock_dir" ]]; then
+        local lock_age=$(( $(date +%s) - $(stat -f %m "$lock_dir" 2>/dev/null || echo 0) ))
+        [[ $lock_age -gt 60 ]] && rmdir "$lock_dir" 2>/dev/null
+    fi
     mkdir "$lock_dir" 2>/dev/null || return
 
     if [[ "$is_umbrella" == "true" && -n "$sub_name" ]]; then
