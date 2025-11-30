@@ -395,6 +395,106 @@ EOF
 }
 
 # ============================================
+# PROJECT INIT FUNCTIONS
+# ============================================
+
+# Find parent umbrella project
+find_parent_umbrella() {
+    local dir="$1"
+    local parent_dir=$(dirname "$dir")
+    local depth=0
+    while [[ "$parent_dir" != "/" && $depth -lt 5 ]]; do
+        if [[ -f "$parent_dir/.claude/statusline-project.json" ]]; then
+            echo "$parent_dir/.claude/statusline-project.json"
+            return
+        fi
+        parent_dir=$(dirname "$parent_dir")
+        ((depth++))
+    done
+}
+
+# Initialize umbrella project
+init_umbrella_project() {
+    local target="${1:-$PWD}"
+    target=$(cd "$target" 2>/dev/null && pwd) || { print_error "Directory not found: $1"; exit 1; }
+
+    local config="$target/.claude/statusline-project.json"
+
+    echo ""
+    if [[ -f "$config" ]]; then
+        print_warn "Project config already exists: $config"
+        if ! ask_yes_no "Overwrite?" "n"; then
+            exit 0
+        fi
+    fi
+
+    mkdir -p "$target/.claude" || { print_error "Cannot create .claude directory"; exit 1; }
+
+    local folder_name=$(basename "$target")
+
+    cat > "$config" << EOF
+{
+  "name": "$folder_name",
+  "icon": "🌌",
+  "color": null,
+  "git": null,
+  "parent": null
+}
+EOF
+
+    print_success "Created umbrella project: ${CYAN}$config${RESET}"
+    print_info "Sub-projects in ${CYAN}$target/*${RESET} will auto-link to this umbrella"
+    echo ""
+}
+
+# Initialize regular project
+init_regular_project() {
+    local target="${1:-$PWD}"
+    target=$(cd "$target" 2>/dev/null && pwd) || { print_error "Directory not found: $1"; exit 1; }
+
+    local config="$target/.claude/statusline-project.json"
+
+    echo ""
+    if [[ -f "$config" ]]; then
+        print_warn "Project config already exists: $config"
+        if ! ask_yes_no "Overwrite?" "n"; then
+            exit 0
+        fi
+    fi
+
+    mkdir -p "$target/.claude" || { print_error "Cannot create .claude directory"; exit 1; }
+
+    local folder_name=$(basename "$target")
+    local git_remote=$(git -C "$target" remote get-url origin 2>/dev/null | sed 's|git@\([^:]*\):|https://\1/|;s|\.git$||')
+    local parent_config=$(find_parent_umbrella "$target")
+
+    # Format JSON values
+    local git_json="null"
+    local parent_json="null"
+    [[ -n "$git_remote" ]] && git_json="\"$git_remote\""
+    [[ -n "$parent_config" ]] && parent_json="\"$parent_config\""
+
+    cat > "$config" << EOF
+{
+  "name": "$folder_name",
+  "icon": "📁",
+  "color": null,
+  "git": $git_json,
+  "parent": $parent_json
+}
+EOF
+
+    print_success "Created project: ${CYAN}$config${RESET}"
+    [[ -n "$git_remote" ]] && print_info "Git: ${CYAN}$git_remote${RESET}"
+    if [[ -n "$parent_config" ]]; then
+        print_info "Linked to umbrella: ${CYAN}$parent_config${RESET}"
+    else
+        print_info "No parent umbrella found ${DIM}(costs tracked locally only)${RESET}"
+    fi
+    echo ""
+}
+
+# ============================================
 # MAIN
 # ============================================
 
@@ -422,18 +522,36 @@ case "${1:-}" in
         print_info "Remove 'statusLine' from settings.json manually"
         echo ""
         ;;
+    --init-umbrella)
+        init_umbrella_project "${2:-}"
+        ;;
+    --init-project)
+        init_regular_project "${2:-}"
+        ;;
     --help|-h)
         echo ""
         echo -e "  ${BOLD}Claude Code Statusline Installer${RESET}"
         echo ""
         echo -e "  ${DIM}Usage:${RESET} ./install.sh [option]"
         echo ""
-        echo -e "  ${DIM}Options:${RESET}"
-        echo -e "    ${SLATE}(none)${RESET}      Interactive installation"
-        echo -e "    ${SLATE}--defaults${RESET}  Install with defaults"
-        echo -e "    ${SLATE}--update${RESET}    Update script only"
-        echo -e "    ${SLATE}--uninstall${RESET} Remove everything"
-        echo -e "    ${SLATE}--help${RESET}      Show this help"
+        echo -e "  ${DIM}Install Options:${RESET}"
+        echo -e "    ${SLATE}(none)${RESET}          Interactive installation"
+        echo -e "    ${SLATE}--defaults${RESET}      Install with defaults"
+        echo -e "    ${SLATE}--update${RESET}        Update script only"
+        echo -e "    ${SLATE}--uninstall${RESET}     Remove everything"
+        echo ""
+        echo -e "  ${DIM}Project Options:${RESET}"
+        echo -e "    ${SLATE}--init-umbrella [path]${RESET}  Create umbrella/parent project"
+        echo -e "    ${SLATE}--init-project [path]${RESET}   Create project (auto-links to umbrella)"
+        echo ""
+        echo -e "  ${DIM}Other:${RESET}"
+        echo -e "    ${SLATE}--preview${RESET}       Preview statusline appearance"
+        echo -e "    ${SLATE}--help${RESET}          Show this help"
+        echo ""
+        echo -e "  ${DIM}Examples:${RESET}"
+        echo -e "    ${CYAN}./install.sh${RESET}                          ${DIM}# Interactive install${RESET}"
+        echo -e "    ${CYAN}./install.sh --init-umbrella ~/projects${RESET}  ${DIM}# Create umbrella${RESET}"
+        echo -e "    ${CYAN}./install.sh --init-project ~/projects/app${RESET} ${DIM}# Create project${RESET}"
         echo ""
         ;;
     --preview)

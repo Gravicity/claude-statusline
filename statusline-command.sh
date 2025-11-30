@@ -2,6 +2,148 @@
 # Claude Code Statusline - Dynamic 4/5-line display
 # Displays: Model, context, memory, cost, project, git, stats, pulse animation
 
+# ============================================
+# CLI COMMANDS (run before stdin)
+# ============================================
+
+RESET='\033[0m'
+BOLD='\033[1m'
+DIM='\033[2m'
+PURPLE='\033[1;38;2;139;92;246m'
+GREEN='\033[1;38;2;34;197;94m'
+YELLOW='\033[1;38;2;234;179;8m'
+CYAN='\033[1;36m'
+SLATE='\033[1;38;2;148;163;184m'
+
+cli_print_success() { echo -e "  ${GREEN}✓${RESET} $1"; }
+cli_print_info() { echo -e "  ${CYAN}→${RESET} $1"; }
+cli_print_warn() { echo -e "  ${YELLOW}!${RESET} $1"; }
+cli_print_error() { echo -e "  ${PURPLE}✗${RESET} $1"; }
+
+# Find parent umbrella project
+find_parent_umbrella() {
+    local dir="$1"
+    local parent_dir=$(dirname "$dir")
+    local depth=0
+    while [[ "$parent_dir" != "/" && $depth -lt 5 ]]; do
+        if [[ -f "$parent_dir/.claude/statusline-project.json" ]]; then
+            echo "$parent_dir/.claude/statusline-project.json"
+            return
+        fi
+        parent_dir=$(dirname "$parent_dir")
+        ((depth++))
+    done
+}
+
+# Initialize umbrella project
+init_umbrella() {
+    local target="${1:-$PWD}"
+    target=$(cd "$target" 2>/dev/null && pwd) || { cli_print_error "Directory not found: $1"; exit 1; }
+
+    local config="$target/.claude/statusline-project.json"
+
+    if [[ -f "$config" ]]; then
+        cli_print_warn "Project config already exists: $config"
+        echo -ne "  ${SLATE}Overwrite? [y/N]:${RESET} "
+        read -r response
+        [[ ! "$response" =~ ^[Yy] ]] && exit 0
+    fi
+
+    mkdir -p "$target/.claude" || { cli_print_error "Cannot create .claude directory"; exit 1; }
+
+    local folder_name=$(basename "$target")
+
+    cat > "$config" << EOF
+{
+  "name": "$folder_name",
+  "icon": "🌌",
+  "color": null,
+  "git": null,
+  "parent": null
+}
+EOF
+
+    cli_print_success "Created umbrella project: ${CYAN}$config${RESET}"
+    cli_print_info "Sub-projects in ${CYAN}$target/*${RESET} will auto-link to this umbrella"
+    exit 0
+}
+
+# Initialize regular project
+init_project() {
+    local target="${1:-$PWD}"
+    target=$(cd "$target" 2>/dev/null && pwd) || { cli_print_error "Directory not found: $1"; exit 1; }
+
+    local config="$target/.claude/statusline-project.json"
+
+    if [[ -f "$config" ]]; then
+        cli_print_warn "Project config already exists: $config"
+        echo -ne "  ${SLATE}Overwrite? [y/N]:${RESET} "
+        read -r response
+        [[ ! "$response" =~ ^[Yy] ]] && exit 0
+    fi
+
+    mkdir -p "$target/.claude" || { cli_print_error "Cannot create .claude directory"; exit 1; }
+
+    local folder_name=$(basename "$target")
+    local git_remote=$(git -C "$target" remote get-url origin 2>/dev/null | sed 's|git@\([^:]*\):|https://\1/|;s|\.git$||')
+    local parent_config=$(find_parent_umbrella "$target")
+
+    # Format JSON values
+    local git_json="null"
+    local parent_json="null"
+    [[ -n "$git_remote" ]] && git_json="\"$git_remote\""
+    [[ -n "$parent_config" ]] && parent_json="\"$parent_config\""
+
+    cat > "$config" << EOF
+{
+  "name": "$folder_name",
+  "icon": "📁",
+  "color": null,
+  "git": $git_json,
+  "parent": $parent_json
+}
+EOF
+
+    cli_print_success "Created project: ${CYAN}$config${RESET}"
+    [[ -n "$git_remote" ]] && cli_print_info "Git: ${CYAN}$git_remote${RESET}"
+    if [[ -n "$parent_config" ]]; then
+        cli_print_info "Linked to umbrella: ${CYAN}$parent_config${RESET}"
+    else
+        cli_print_info "No parent umbrella found ${DIM}(costs tracked locally only)${RESET}"
+    fi
+    exit 0
+}
+
+# CLI help
+show_cli_help() {
+    echo ""
+    echo -e "  ${BOLD}Claude Code Statusline${RESET} ${DIM}v2.0${RESET}"
+    echo ""
+    echo -e "  ${DIM}Usage:${RESET}"
+    echo -e "    ${SLATE}(stdin)${RESET}           Normal statusline mode (receives JSON from Claude Code)"
+    echo -e "    ${SLATE}--init-project${RESET}    Create project config in current or specified directory"
+    echo -e "    ${SLATE}--init-umbrella${RESET}   Create umbrella/parent project config"
+    echo -e "    ${SLATE}--help${RESET}            Show this help"
+    echo ""
+    echo -e "  ${DIM}Examples:${RESET}"
+    echo -e "    ${CYAN}~/.claude/statusline-command.sh --init-umbrella ~/projects${RESET}"
+    echo -e "    ${CYAN}~/.claude/statusline-command.sh --init-project${RESET}"
+    echo -e "    ${CYAN}cd ~/projects/my-app && ~/.claude/statusline-command.sh --init-project${RESET}"
+    echo ""
+    exit 0
+}
+
+# Handle CLI arguments before reading stdin
+case "${1:-}" in
+    --init-umbrella) init_umbrella "${2:-}" ;;
+    --init-project)  init_project "${2:-}" ;;
+    --help|-h)       show_cli_help ;;
+esac
+
+# ============================================
+# STATUSLINE MODE (stdin JSON input)
+# ============================================
+
 input=$(cat)
 
 # Debug: dump raw JSON (set STATUSLINE_DEBUG=1)
@@ -189,13 +331,19 @@ init_project_if_git() {
         ((depth++))
     done
 
+    # Format JSON values
+    local git_json="null"
+    local parent_json="null"
+    [[ -n "$git_remote" ]] && git_json="\"$git_remote\""
+    [[ -n "$parent_config" ]] && parent_json="\"$parent_config\""
+
     cat > "$config" << EOF
 {
   "name": "$folder_name",
   "icon": "📁",
   "color": null,
-  "git": ${git_remote:+\"$git_remote\"}${git_remote:-null},
-  "parent": ${parent_config:+\"$parent_config\"}${parent_config:-null}
+  "git": $git_json,
+  "parent": $parent_json
 }
 EOF
 }
