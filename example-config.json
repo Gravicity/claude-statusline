@@ -8,7 +8,9 @@
   },
   "display": {
     "pulse_animation": true,
-    "cost_cycling": true
+    "cost_cycling": true,
+    "path_cycling": true,
+    "path_style": 0
   },
   "health_colors": {
     "good": [34, 197, 94],

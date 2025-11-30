@@ -177,6 +177,8 @@ GIT_REPOS_ONLY=true
 AUTO_CREATE_UMBRELLA=false
 PULSE_ANIMATION=true
 COST_CYCLING=true
+PATH_CYCLING=true
+PATH_STYLE=0  # 0=forward, 1=project+depth, 2=reverse
 
 # Health colors - RGB values
 HEALTH_GOOD_RGB=(34 197 94)      # Green  #22C55E
@@ -198,6 +200,8 @@ if [[ -f "$CONFIG_FILE" ]]; then
     AUTO_CREATE_UMBRELLA=$(jq -r '.tracking.auto_create_umbrella // false' "$CONFIG_FILE")
     PULSE_ANIMATION=$(jq -r '.display.pulse_animation // true' "$CONFIG_FILE")
     COST_CYCLING=$(jq -r '.display.cost_cycling // true' "$CONFIG_FILE")
+    PATH_CYCLING=$(jq -r '.display.path_cycling // true' "$CONFIG_FILE")
+    PATH_STYLE=$(jq -r '.display.path_style // 0' "$CONFIG_FILE")
 
     # Health colors from config
     if jq -e '.health_colors.good' "$CONFIG_FILE" > /dev/null 2>&1; then
@@ -368,7 +372,7 @@ project_icon="" project_name="" project_root=""
 if [[ -n "$project_config" && -f "$project_config" ]]; then
     project_root=$(dirname "$(dirname "$project_config")")
     project_icon=$(jq -r '.icon // ""' "$project_config" 2>/dev/null)
-    [[ "$cwd" == "$project_root" ]] && project_name=$(jq -r '.name // ""' "$project_config" 2>/dev/null)
+    project_name=$(jq -r '.name // ""' "$project_config" 2>/dev/null)
 else
     project_icon="🏠"
 fi
@@ -497,35 +501,69 @@ fi
 # ============================================
 truncate_name() {
     local name="$1" max="${2:-15}"
-    [[ "$name" == *" "* ]] && name="${name%% *}.."
-    [[ ${#name} -gt $max ]] && name="${name:0:$((max-2))}.."
+    [[ "$name" == *" "* ]] && name="${name%% *}…"
+    [[ ${#name} -gt $max ]] && name="${name:0:$((max-1))}…"
     echo "$name"
 }
 
-truncate_path() {
-    local path="$1"
+# Path cycling (changes every ~3 seconds)
+PATH_MAX=32
+if [[ "$PATH_CYCLING" == "true" ]]; then
+    path_cycle=$((display_cycle / 3 % 3))
+else
+    path_cycle=$PATH_STYLE
+fi
+
+# Truncate from end (forward): ~/Gravicity…/.claude/sk…
+truncate_forward() {
+    local path="$1" max="$2"
     [[ "$path" == "$HOME"* ]] && path="~${path#$HOME}"
-    echo "$path" | sed 's|\([^/ ]*\) [^/]*|\1..|g'
+    path=$(echo "$path" | sed 's|\([^/ ]*\) [^/]*|\1…|g')
+    [[ ${#path} -gt $max ]] && path="${path:0:$((max-1))}…"
+    echo "$path"
+}
+
+# Truncate from start (reverse): …skills/field-commander
+truncate_reverse() {
+    local path="$1" max="$2"
+    [[ ${#path} -gt $max ]] && path="…${path: -$((max-1))}"
+    echo "$path"
 }
 
 if [[ -n "$project_name" && -n "$project_root" ]]; then
     if [[ "$cwd" == "$project_root" ]]; then
-        display_dir="$project_name"
+        display_dir=$(truncate_name "$project_name" $PATH_MAX)
     elif [[ "$cwd" == "$project_root"/* ]]; then
-        short_project=$(truncate_name "$project_name" 12)
+        short_project=$(truncate_name "$project_name" 10)
         rel_path="${cwd#$project_root/}"
         IFS='/' read -ra rel_parts <<< "$rel_path"
         num_parts=${#rel_parts[@]}
+        last_folder="${rel_parts[$((num_parts-1))]}"
+
         if [[ $num_parts -eq 1 ]]; then
-            display_dir="${short_project}/$(truncate_name "${rel_parts[0]}" 12)"
+            # Single level - no cycling needed
+            display_dir="${short_project}/${last_folder}"
+            [[ ${#display_dir} -gt $PATH_MAX ]] && display_dir="${display_dir:0:$((PATH_MAX-1))}…"
         else
-            display_dir="${short_project}/../$(truncate_name "${rel_parts[$((num_parts-1))]}" 12)"
+            case $path_cycle in
+                0)  # Forward truncation: ~/Gravicity…/.claude/sk…
+                    display_dir=$(truncate_forward "$cwd" $PATH_MAX)
+                    ;;
+                1)  # Project + depth + last: Gravicity…//field-comm…
+                    slashes=$(printf '/%.0s' $(seq 1 $((num_parts - 1))))
+                    display_dir="${short_project}…${slashes}${last_folder}"
+                    [[ ${#display_dir} -gt $PATH_MAX ]] && display_dir="${display_dir:0:$((PATH_MAX-1))}…"
+                    ;;
+                2)  # Reverse truncation: …skills/field-commander
+                    display_dir=$(truncate_reverse "$rel_path" $PATH_MAX)
+                    ;;
+            esac
         fi
     else
-        display_dir=$(truncate_path "$cwd")
+        display_dir=$(truncate_forward "$cwd" $PATH_MAX)
     fi
 else
-    display_dir=$(truncate_path "$cwd")
+    display_dir=$(truncate_forward "$cwd" $PATH_MAX)
     [[ "$display_dir" == "~" || -z "$display_dir" ]] && display_dir="Home"
 fi
 

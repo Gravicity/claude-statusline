@@ -63,6 +63,13 @@ Can also be set via environment variable: `export CLAUDE_PLAN="max5x"`
 |--------|------|---------|-------------|
 | `pulse_animation` | boolean | `true` | Enable animated pulse on bottom line |
 | `cost_cycling` | boolean | `true` | Cycle through /hr → session → project costs |
+| `path_cycling` | boolean | `true` | Cycle through path display styles |
+| `path_style` | integer | `0` | Path style when cycling disabled (0=forward, 1=project+depth, 2=reverse) |
+
+**Path Styles:**
+- `0` (forward): `~/Gravicity…/.claude/sk…` - truncates from end
+- `1` (project+depth): `Gravicity…//field-comm…` - shows project, depth slashes, last folder
+- `2` (reverse): `…skills/field-commander` - truncates from start, shows end of path
 
 ### `health_colors`
 

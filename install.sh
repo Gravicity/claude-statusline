@@ -305,7 +305,9 @@ create_config() {
   },
   "display": {
     "pulse_animation": $PULSE_ANIMATION,
-    "cost_cycling": $COST_CYCLING
+    "cost_cycling": $COST_CYCLING,
+    "path_cycling": true,
+    "path_style": 0
   },
   "health_colors": {
     "good": [34, 197, 94],
