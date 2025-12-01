@@ -116,21 +116,31 @@ Config file: `~/.claude/statusline-config.json` (optional - sensible defaults us
 
 ```json
 {
+  "version": 1,
   "plan": "api",
   "tracking": {
     "enabled": true,
-    "auto_create_mode": "claude_folder"
+    "auto_create_mode": "claude_folder",
+    "auto_create_umbrella": false
   },
   "display": {
     "pulse_animation": true,
-    "cost_cycling": true
+    "cost_cycling": true,
+    "path_cycling": true,
+    "path_style": 0
   },
   "thresholds": {
     "context_warn": 50,
-    "context_crit": 75
+    "context_crit": 75,
+    "memory_warn": 4,
+    "memory_crit": 8,
+    "staleness_warn": 100,
+    "staleness_crit": 500
   }
 }
 ```
+
+*Additional `health_colors` config available—see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).*
 
 ### Auto-Create Modes
 
@@ -142,7 +152,7 @@ Config file: `~/.claude/statusline-config.json` (optional - sensible defaults us
 | `always` | Any directory |
 | `never` | Manual `--init` only |
 
-**When projects are created:** With `claude_folder` mode (default), statusline projects are created when a `.claude/` folder exists. Claude creates this folder when you run `claude init` or select "don't ask again" for permissions—signaling project-specific intent.
+**When `.claude/` gets created:** Claude Code creates this folder when you select "don't ask again" for permissions (saves `settings.local.json`), use `/config`, or manually create it. The folder signals project-specific intent, making it a good trigger for statusline tracking.
 
 See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for all options.
 
@@ -156,9 +166,12 @@ Create `.claude/statusline-project.json` in any project:
   "icon": "🚀",
   "color": "#6366F1",
   "git": "https://github.com/user/my-app",
-  "parent": "/path/to/umbrella/.claude/statusline-project.json"
+  "parent": "/path/to/umbrella/.claude/statusline-project.json",
+  "costs": { ... }
 }
 ```
+
+*The `costs` object is auto-populated with session data, totals, and breakdowns.*
 
 ### Hierarchy Setup
 
@@ -242,9 +255,13 @@ The statusline automatically detects terminal capabilities via `$COLORTERM`:
 | **Warp** | ✅ Yes | Full RGB gradients |
 | **macOS Terminal.app** | ❌ No | 256-color fallback, simplified pulse |
 
-### Recommended: Install a Truecolor Terminal
+### IDE Users
 
-For the best experience with smooth gradient animations:
+Most users run Claude Code in an IDE like **VS Code** or **Cursor**—these already support truecolor, so the statusline works perfectly out of the box.
+
+### Terminal Power Users
+
+If you run Claude directly in a terminal, **iTerm2** or **Kitty** are highly recommended for the full experience:
 
 ```bash
 # iTerm2 - Feature-rich, macOS native feel
@@ -284,6 +301,67 @@ If your terminal doesn't support truecolor (like macOS Terminal.app), the status
 # Show help
 ~/.claude/statusline-command.sh --help
 ```
+
+## Background
+
+As a father of two, my coding sessions get interrupted—a lot. I often have several terminals with Claude running, and sometimes hours or days go by before I come back to a wall of sessions (or none at all after an IDE crash). Coming back after a great session just to figure out where I left off felt daunting.
+
+I wanted to see which model I was using, how much context I'd burned through, what branch I was on, whether the repo was up to date—all at a glance. Running `/cost` or `/model` hundreds of times gets old. And asking Claude to recall any of this wastes context and pollutes it.
+
+This started as that quick hack, then grew into cost tracking across my [Gravicity](https://github.com/Gravicity) umbrella project where I kept losing track of what I'd spent where. The idea kept evolving from there (see [docs/PHASE2-PLAN.md](docs/PHASE2-PLAN.md) for the rabbit hole).
+
+**Project stats** (tracked by the statusline itself):
+- Started: November 29, 2025
+- Tracked cost: ~$90 (API estimates)
+- Actual cost: Probably $100-120—delta tracking wasn't working until mid-project
+
+Cost tracking isn't essential on the Max 20x plan, but it's useful for understanding where time actually goes.
+
+## Roadmap
+
+### Completed
+
+**Display**
+- Model-specific themes (Opus/Sonnet/Haiku)
+- Truecolor gradient pulse + 256-color fallback
+- Health-colored context/staleness indicators
+- 3 cost display modes with cycling (burn rate → session → project total)
+- 3 path display styles with cycling
+- Git stats (branch, ahead/behind, staged/modified/untracked, diff, commit age)
+- Clickable session ID (opens transcript)
+
+**Tracking**
+- Hierarchical cost tracking (MASTER → Umbrella → Project)
+- Session attribution with breakdown structure
+- Delta cost tracking (accurate across folder switches)
+- 5 auto-create modes (never/git_only/claude_folder/git_and_claude/always)
+- Atomic file locking with stale cleanup + retry
+- Transcript and git caching
+
+**CLI**
+- `--init-master`, `--init-umbrella`, `--init` for hierarchy setup
+- `--dedicate` for session cost attribution
+- `--sync` for cost reconciliation
+
+### Ideas
+
+Some ideas that might happen:
+
+- **Session summaries** - Brief summaries updated over time (after compacts or on request), stored in project logs with session IDs for easy resumption via `claude --resume <id>`
+- **Smart keyword tagging** - Track key topics and features worked on for quick reference and filtering
+- **Budget alerts** - Warnings when approaching cost thresholds
+- **Compact offloading** - Delegate chat compaction to external Haiku sessions or general agents, reducing context bloat and enabling smarter project memory updates
+- **Export/reports** - CSV/JSON export for expense tracking
+
+No promises, no timeline. PRs welcome.
+
+## Support
+
+If this saves you time or money (or just looks cool), consider:
+- ⭐ Starring the repo
+- 🐛 Reporting issues
+- 💡 Suggesting features
+- ☕ [Sponsoring](https://github.com/sponsors/Gravicity) (coming soon)
 
 ## License
 
