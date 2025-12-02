@@ -820,6 +820,9 @@ update_project_cost() {
         .costs.sessions[$sid].started = (.costs.sessions[$sid].started // (if $started != "" then $started else null end)) |
         .costs.sessions[$sid].transcript = (.costs.sessions[$sid].transcript // (if $transcript != "" then $transcript else null end)) |
 
+        # Preserve metadata (written by session-enricher agent, not overwritten here)
+        .costs.sessions[$sid].metadata = (.costs.sessions[$sid].metadata // null) |
+
         # Phase 2: Use breakdown structure instead of contributed
         # Initialize breakdown object if needed
         .costs.sessions[$sid].breakdown = (.costs.sessions[$sid].breakdown // {}) |
@@ -1118,6 +1121,28 @@ context_pct=0 context_color="$HEALTH_GOOD"
 if [[ $total_with_buffer -gt 0 ]]; then
     context_pct=$(echo "scale=0; ($total_with_buffer * 100) / 200000" | bc)
     context_color=$(get_health_color $context_pct $CONTEXT_WARN $CONTEXT_CRIT 1)
+fi
+
+# --- Context Barrier Triggers for Session Intelligence ---
+# Triggers metadata extraction at 50% and 80% context thresholds
+# Fire-and-forget: writes trigger file, agent picks it up asynchronously
+TRIGGER_DIR="$CACHE_DIR/triggers"
+[[ ! -d "$TRIGGER_DIR" ]] && mkdir -p "$TRIGGER_DIR"
+
+if [[ -n "$session_id" && -f "$transcript_path" ]]; then
+    # 50% threshold trigger
+    if [[ $context_pct -ge 50 && ! -f "$TRIGGER_DIR/extracted-50-$session_id" ]]; then
+        echo "{\"stage\":\"50%\",\"session_id\":\"$session_id\",\"transcript\":\"$transcript_path\",\"cwd\":\"$cwd\",\"context_pct\":$context_pct}" \
+            > "$TRIGGER_DIR/pending-$session_id-50"
+        touch "$TRIGGER_DIR/extracted-50-$session_id"
+    fi
+
+    # 80% threshold trigger
+    if [[ $context_pct -ge 80 && ! -f "$TRIGGER_DIR/extracted-80-$session_id" ]]; then
+        echo "{\"stage\":\"80%\",\"session_id\":\"$session_id\",\"transcript\":\"$transcript_path\",\"cwd\":\"$cwd\",\"context_pct\":$context_pct}" \
+            > "$TRIGGER_DIR/pending-$session_id-80"
+        touch "$TRIGGER_DIR/extracted-80-$session_id"
+    fi
 fi
 
 session_short="${session_id: -6}"
